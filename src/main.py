@@ -58,35 +58,26 @@ def select_file():
         except ValueError:
             print("数値を入力してください。")
 
+
 class Speaker :
-    def __init__(self,ser,filename):
+    def __init__(self,ser,line):
         self.ser=ser
-        self.filename=filename
+        self.line=line
     def write(self):
-        try :
-            with open(self.filename, 'r') as f:
-                print(f"'{self.filename}'の内容を送信します...")
-                for line in f:
-                    tmpline = line
-                    self.ser.write(line.encode('utf-8'))
-                    print(f"送信: {line.strip()}")
-                    time.sleep(0.1) # 必要に応じてディレイを調整
-            print("送信が完了しました。")
-        except FileNotFoundError:
-            print(f"ファイルが見つかりません: {self.filename}")
-        except Exception as e:
-            print(f"エラーが発生しました: {e}")
+        self.ser.write(self.line.encode('utf-8'))
+        print(f"送信: {self.line.strip()}")
+        time.sleep(0.1) # 必要に応じてディレイを調整
+        print("送信が完了しました。")
 
 class Plotter :
-    def __init__(self,line):
+    def __init__(self,line,ser):
         self.line=line
+        self.ser=ser
     def mapping(self):
-        line = line.split(' ')
-        num=line[2]
-        total_areas = 64
+        line = self.line.split(' ')
+        num=line[2]#2番目がスピーカ番号
         grid_count = 8
         area_size = 200
-        # 入力された番号が1から64の範囲内かチェック
         # 1つのセルのサイズ
         cell_size = area_size / grid_count 
         # 200 / 8 = 25
@@ -102,4 +93,12 @@ class Plotter :
         y_min = row_index * cell_size
         x_max = x_min + cell_size
         y_max = y_min + cell_size
+        #中心座標を計算
+        center_x = (x_min + x_max) / 2
+        center_y = (y_min+ y_max) / 2
+        return(center_x,center_y)
+    def write(self):
+        cmd = f""
+    def cmdbranch(self):
+        pass
 
