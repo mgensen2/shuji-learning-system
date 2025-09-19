@@ -2,13 +2,13 @@ import serial
 from serial.tools import list_ports
 import time
 import os
-
+#メイン関数
 def main():
     flag=1
     point=1
     while(flag):
         print("習字学習システム\n")
-        if(point):
+        if(point):#初回のみシリアル設定フラグ処理
             print("スピーカアレイのシリアルポート選択\n")
             ser1 = select_port()
             sp = Speaker(ser1)
@@ -21,14 +21,18 @@ def main():
         try:
             with open(file, 'r') as f:
                 print(f"'{file}'の内容で動作を開始します．．．")
-                for line in f:
-                    pl.mapping(line)
+                for line in f:#行が終わるまで繰り返し
+                    data = pl.mapping(line)
                     sp.write(line)
-                    pl.write(line)
+                    pl.write(data[1],data[2],data[3])
         except Exception as e:
             print(f"エラーが発生しました: {e}")
         print("つづけますか？ y or n\n")
-            #処理noの場合flag=0
+        yn=yes_no_input()
+        if(yn==0):
+            flag=0#nの場合，繰り返し処理終了
+            ser1.close()
+            ser2.close()
 
 
 def select_port(): #ポート選択関数
@@ -86,6 +90,13 @@ def select_file():
         except ValueError:
             print("数値を入力してください。")
 
+def yes_no_input():
+    while True:
+        choice = input("Please respond with 'yes' or 'no' [y/N]: ").lower()
+        if choice in ['y', 'ye', 'yes']:
+            return True
+        elif choice in ['n', 'no']:
+            return False
 
 class Speaker :
     def __init__(self,ser):
@@ -133,6 +144,6 @@ class Plotter :
         print(f"送信: {self.line.strip()}")
     def cmdbranch(self):
         pass
-
+#おまじない
 if __name__ == "main":
     main()
