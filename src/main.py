@@ -2,7 +2,35 @@ import serial
 from serial.tools import list_ports
 import time
 import os
-import math
+
+def main():
+    flag=1
+    point=1
+    while(flag):
+        print("習字学習システム\n")
+        if(point):
+            print("スピーカアレイのシリアルポート選択\n")
+            ser1 = select_port()
+            sp = Speaker(ser1)
+            print("プロッタのシリアルポート選択\n")
+            ser2 = select_port()
+            pl = Plotter(ser2)
+            point = 0
+        print("読み込みファイルを選択\n")
+        file = select_file()
+        try:
+            with open(file, 'r') as f:
+                print(f"'{file}'の内容で動作を開始します．．．")
+                for line in f:
+                    pl.mapping(line)
+                    sp.write(line)
+                    pl.write(line)
+        except Exception as e:
+            print(f"エラーが発生しました: {e}")
+        print("つづけますか？ y or n\n")
+            #処理noの場合flag=0
+
+
 def select_port(): #ポート選択関数
     ser = serial.Serial()
     ser.baudrate = 11520    # esp32,プロッターのレート
@@ -60,22 +88,21 @@ def select_file():
 
 
 class Speaker :
-    def __init__(self,ser,line):
+    def __init__(self,ser):
         self.ser=ser
-        self.line=line
-    def write(self):
-        self.ser.write(self.line.encode('utf-8'))
+    def write(self,line):
+        line = line + '\n'
+        self.ser.write(line.encode('utf-8'))
         print(f"送信: {self.line.strip()}")
         time.sleep(0.1) # 必要に応じてディレイを調整
         print("送信が完了しました。")
 
 class Plotter :
-    def __init__(self,line,ser):
-        self.line=line
+    def __init__(self,ser):
         self.ser=ser
-    def mapping(self):
-        line = self.line.split(' ')
-        num=line[2]#2番目がスピーカ番号
+    def mapping(self,line):
+        tmpline = line.split(' ')
+        num=tmpline[2]#2番目がスピーカ番号
         grid_count = 8
         area_size = 200
         # 1つのセルのサイズ
@@ -93,12 +120,19 @@ class Plotter :
         y_min = row_index * cell_size
         x_max = x_min + cell_size
         y_max = y_min + cell_size
-        #中心座標を計算
-        center_x = (x_min + x_max) / 2
-        center_y = (y_min+ y_max) / 2
-        return(center_x,center_y)
-    def write(self):
-        cmd = f""
+        #中心座標を計算(右上が原点でマイナス符号)
+        center_x = ((x_min + x_max) / 2)-210
+        center_y = -((y_min+ y_max) / 2)
+        delay= tmpline[5]#5番目のパラメータがdelay
+        #grblの送り速度計算
+        delay = 60000 / delay
+        return(center_x,center_y,delay)
+    def write(self,center_x,center_y,delay):
+        line = f'G1 {center_x} {center_y} F{delay}' + '\n'
+        self.ser.write(line.encode('utf-8'))
+        print(f"送信: {self.line.strip()}")
     def cmdbranch(self):
         pass
 
+if __name__ == "main":
+    main()
