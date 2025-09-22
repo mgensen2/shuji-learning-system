@@ -6,6 +6,7 @@ import os
 def main():
     flag=1
     point=1
+    branch=0
     while(flag):
         print("習字学習システム\n")
         if(point):#初回のみシリアル設定フラグ処理
@@ -22,9 +23,17 @@ def main():
             with open(file, 'r') as f:
                 print(f"'{file}'の内容で動作を開始します．．．")
                 for line in f:#行が終わるまで繰り返し
+                    line=line.split(' ')#半角スペースで区切り
+                    tmp = line
+                    if tmp[0] == "A0" :#delay命令の場合，次の移動は高速移動
+                        branch = 1
+                    else :
+                        branch = 0
                     data = pl.mapping(line)
                     sp.write(line)
-                    pl.write(data[1],data[2],data[3])
+                    pl.write(data[1],data[2],data[3],branch)
+                        
+                    
         except Exception as e:
             print(f"エラーが発生しました: {e}")
         print("つづけますか？ y or n\n")
@@ -113,7 +122,7 @@ class Plotter :
         self.ser=ser
     def mapping(self,line):
         tmpline = line.split(' ')
-        num=tmpline[2]#2番目がスピーカ番号
+        num=tmpline[1]#1番目のパラメータがスピーカ番号
         grid_count = 8
         area_size = 200
         # 1つのセルのサイズ
@@ -134,15 +143,19 @@ class Plotter :
         #中心座標を計算(右上が原点でマイナス符号)
         center_x = ((x_min + x_max) / 2)-210
         center_y = -((y_min+ y_max) / 2)
-        delay= tmpline[5]#5番目のパラメータがdelay
+        delay= tmpline[2]#2番目のパラメータがdelay
         #grblの送り速度計算
         delay = 60000 / delay
         return(center_x,center_y,delay)
-    def write(self,center_x,center_y,delay):
-        line = f'G1 {center_x} {center_y} F{delay}' + '\n'
+    def write(self,center_x,center_y,delay,branch):
+        if branch :
+            line = f'G0 {center_x} {center_y}' + '\n'
+        else :
+            line = f'G1 {center_x} {center_y} F{delay}' + '\n'
         self.ser.write(line.encode('utf-8'))
         print(f"送信: {self.line.strip()}")
-    def cmdbranch(self):
+    def next(self):
+        
         pass
 #おまじない
 if __name__ == "main":
