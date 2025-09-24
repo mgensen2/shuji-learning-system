@@ -23,20 +23,20 @@ def main():
             with open(file, 'r') as f:
                 print(f"'{file}'の内容で動作を開始します．．．")
                 for line in f:#行が終わるまで繰り返し
-                    line=line.split(' ')#半角スペースで区切り
-                    tmp = line
+                    line = line.strip("\n")
+                    tmp=line.split(' ')#半角スペースで区切り
+                    print(tmp)
                     if tmp[0] == "C" :
                         pass
                     elif tmp[0] == "A1" or  tmp[0] == "A2":
-                        data = pl.mapping(line)
+                        print("判定ok")
+                        data = pl.mapping(tmp)
+                        print("mapping ok")
                         sp.write(line)
                         pl.write(data[1],data[2],data[3],branch)
+                        branch =0
                     elif tmp[0] == "A0" :
                         branch = 1
-                        data = pl.mapping(line)
-                        sp.write(line)
-                        pl.write(data[1],data[2],data[3],branch)
-                        branch = 0
                     else :
                         print("形式が不正")
         except Exception as e:
@@ -116,9 +116,10 @@ class Speaker :
     def __init__(self,ser):
         self.ser=ser
     def write(self,line):
+        print(line)
         line = line + '\n'
         self.ser.write(line.encode('utf-8'))
-        print(f"送信: {self.line.strip()}")
+        print(f"送信: {line.strip()}")
         time.sleep(0.1) # 必要に応じてディレイを調整
         print("送信が完了しました。")
 
@@ -126,8 +127,9 @@ class Plotter :
     def __init__(self,ser):
         self.ser=ser
     def mapping(self,line):
-        tmpline = line.split(' ')
-        num=tmpline[1]#1番目のパラメータがスピーカ番号
+        #tmpline = line.split(' ')
+        num=line[1]#1番目のパラメータがスピーカ番号
+        num = int(num)
         grid_count = 8
         area_size = 200
         # 1つのセルのサイズ
@@ -148,7 +150,8 @@ class Plotter :
         #中心座標を計算(右上が原点でマイナス符号)
         center_x = ((x_min + x_max) / 2)-210
         center_y = -((y_min+ y_max) / 2)
-        delay= tmpline[2]#2番目のパラメータがdelay
+        delay= line[2]#2番目のパラメータがdelay
+        delay = int(delay)
         #grblの送り速度計算
         delay = 60000 / delay
         return(center_x,center_y,delay)
