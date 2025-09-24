@@ -25,15 +25,20 @@ def main():
                 for line in f:#行が終わるまで繰り返し
                     line=line.split(' ')#半角スペースで区切り
                     tmp = line
-                    if tmp[0] == "A0" :#delay命令の場合，次の移動は高速移動
+                    if tmp[0] == "C" :
+                        pass
+                    elif tmp[0] == "A1" or  tmp[0] == "A2":
+                        data = pl.mapping(line)
+                        sp.write(line)
+                        pl.write(data[1],data[2],data[3],branch)
+                    elif tmp[0] == "A0" :
                         branch = 1
-                    else :
+                        data = pl.mapping(line)
+                        sp.write(line)
+                        pl.write(data[1],data[2],data[3],branch)
                         branch = 0
-                    data = pl.mapping(line)
-                    sp.write(line)
-                    pl.write(data[1],data[2],data[3],branch)
-                        
-                    
+                    else :
+                        print("形式が不正")
         except Exception as e:
             print(f"エラーが発生しました: {e}")
         print("つづけますか？ y or n\n")
