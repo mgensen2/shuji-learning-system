@@ -31,9 +31,10 @@ def main():
                     elif tmp[0] == "A1" or  tmp[0] == "A2":
                         print("判定ok")
                         data = pl.mapping(tmp)
+                        print(f"変換後:{data}")
                         print("mapping ok")
                         sp.write(line)
-                        pl.write(data[1],data[2],data[3],branch)
+                        pl.write(data[0],data[1],data[2],branch)
                         branch =0
                     elif tmp[0] == "A0" :
                         branch = 1
@@ -41,6 +42,7 @@ def main():
                         print("形式が不正")
         except Exception as e:
             print(f"エラーが発生しました: {e}")
+        pl.reset()
         print("つづけますか？ y or n\n")
         yn=yes_no_input()
         if(yn==0):
@@ -51,7 +53,7 @@ def main():
 
 def select_port(): #ポート選択関数
     ser = serial.Serial()
-    ser.baudrate = 11520    # esp32,プロッターのレート
+    ser.baudrate = 115200    # esp32,プロッターのレート
     ser.timeout = 0.1       # タイムアウトの時間
 
     ports = list_ports.comports()    # ポートデータを取得
@@ -116,8 +118,7 @@ class Speaker :
     def __init__(self,ser):
         self.ser=ser
     def write(self,line):
-        print(line)
-        line = line + '\n'
+        line = str(line) + '\n'
         self.ser.write(line.encode('utf-8'))
         print(f"送信: {line.strip()}")
         time.sleep(0.1) # 必要に応じてディレイを調整
@@ -127,7 +128,6 @@ class Plotter :
     def __init__(self,ser):
         self.ser=ser
     def mapping(self,line):
-        #tmpline = line.split(' ')
         num=line[1]#1番目のパラメータがスピーカ番号
         num = int(num)
         grid_count = 8
@@ -150,21 +150,23 @@ class Plotter :
         #中心座標を計算(右上が原点でマイナス符号)
         center_x = ((x_min + x_max) / 2)-210
         center_y = -((y_min+ y_max) / 2)
-        delay= line[2]#2番目のパラメータがdelay
+        delay= line[2]#3番目のパラメータがdelay
         delay = int(delay)
         #grblの送り速度計算
-        delay = 60000 / delay
+        delay = 25 / (delay/1000)
+        delay = delay * 60
         return(center_x,center_y,delay)
     def write(self,center_x,center_y,delay,branch):
         if branch :
-            line = f'G0 {center_x} {center_y}' + '\n'
+            line = f'G0 X{center_x} Y{center_y}'
         else :
-            line = f'G1 {center_x} {center_y} F{delay}' + '\n'
+            line = f'G1 X{center_x} Y{center_y} F{delay}'
+        line = str(line) + '\n'
         self.ser.write(line.encode('utf-8'))
-        print(f"送信: {self.line.strip()}")
-    def next(self):
-        
-        pass
+        print(f"送信: {line.strip()}")
+    def reset(self):
+        line = "G0 X0 Y0"+ "\n"
+        self.ser.write(line.encode('utf-8'))
 #おまじない
 if __name__ == "__main__":
     main()
