@@ -37,11 +37,13 @@ def main():
                         pl.write(data[0],data[1],data[2],branch)
                         branch =0
                     elif tmp[0] == "A0" :
+                        pl.up()
                         branch = 1
                     else :
                         print("形式が不正")
         except Exception as e:
             print(f"エラーが発生しました: {e}")
+        pl.up()
         pl.reset()
         print("つづけますか？ y or n\n")
         yn=yes_no_input()
@@ -159,6 +161,7 @@ class Plotter :
     def write(self,center_x,center_y,delay,branch):
         if branch :
             line = f'G0 X{center_x} Y{center_y}'
+            Plotter.down(self)
         else :
             line = f'G1 X{center_x} Y{center_y} F{delay}'
         line = str(line) + '\n'
@@ -166,6 +169,12 @@ class Plotter :
         print(f"送信: {line.strip()}")
     def reset(self):
         line = "G0 X0 Y0"+ "\n"
+        self.ser.write(line.encode('utf-8'))
+    def down(self) :
+        line = "G0 Z8" + "\n"
+        self.ser.write(line.encode('utf-8'))
+    def up(self) :
+        line= "G0 Z0" + "\n"
         self.ser.write(line.encode('utf-8'))
 #おまじない
 if __name__ == "__main__":
