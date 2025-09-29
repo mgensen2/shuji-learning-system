@@ -26,9 +26,10 @@ def main():
                     line = line.strip("\n")
                     tmp=line.split(' ')#半角スペースで区切り
                     print(tmp)
+                    #命令分岐
                     if tmp[0] == "C" :
-                        pass
-                    elif tmp[0] == "A1" or  tmp[0] == "A2": #
+                        print("config命令\n")
+                    elif tmp[0] == "A1" or  tmp[0] == "A2": 
                         print("ホワイトノイズorバンドパスok")
                         data = pl.mapping(tmp)
                         print(f"変換後:{data}")
@@ -40,31 +41,20 @@ def main():
                         pl.up()
                         branch = 1
                     elif tmp[0] == "B1" or tmp[0] == "B2":
-                        print("複数命令スピーカ処理")
+                        print("複数命令スピーカ処理\n")
                     else :
-                        print("形式が不正")
+                        print("形式が不正\n")
         except Exception as e:#エラー表示
             print(f"エラーが発生しました: {e}")
         pl.up()
         pl.reset()
-        print("つづけますか？ y or n\n")
+        print("つづけますか？\n")
         yn=yes_no_input()
         if(yn==0):
             flag=0#nの場合，繰り返し処理終了
             #ポートクローズ処理
             ser1.close()
             ser2.close()
-
-
-def select_port(): #ポート選択関数
-    ser = serial.Serial()
-    ser.baudrate = 115200    # esp32,プロッターのレート
-    ser.timeout = 0.1       # タイムアウトの時間
-
-    ports = list_ports.comports()    # ポートデータを取得
-    
-    import serial
-from serial.tools import list_ports
 
 def select_port():
     """
@@ -195,19 +185,13 @@ class Plotter :
             line = f'G0 X{center_x} Y{center_y}'
             line = str(line) + '\n'
             self.ser.write(line.encode('utf-8'))
-            while self.res != "Idle" :
-                tmp='?' + '\n'
-                self.ser.write(tmp.encode('utf-8'))
-                self.res = self.ser.readline()
-                self.res =self.res.decode('utf-8')
-                self.res= self.res[1:5]
-                print(self.res)
-                time.sleep(0.1)
+            Plotter.sync(self)
             Plotter.down(self)
         else :
             line = f'G1 X{center_x} Y{center_y} F{delay}'
             line = str(line) + '\n'
             self.ser.write(line.encode('utf-8'))
+            Plotter.sync(self)
         print(f"送信: {line.strip()}")
     def reset(self):#プロッターを初期位置に戻す
         line = "G0 X0 Y0"+ "\n"
@@ -218,6 +202,17 @@ class Plotter :
     def up(self) :#ホルダー上げ
         line= "G0 Z0" + "\n"
         self.ser.write(line.encode('utf-8'))
+    def sync(self) : #タイミング同調
+        while self.res != "Idle" :
+            tmp='?' + '\n'
+            self.ser.write(tmp.encode('utf-8'))
+            self.res = self.ser.readline()
+            self.res =self.res.decode('utf-8')
+            self.res= self.res[1:5]
+            print(self.res)
+            time.sleep(0.01)
+
+
 #おまじない
 if __name__ == "__main__":
     main()
