@@ -33,8 +33,8 @@ def main():
                         data = pl.mapping(tmp)
                         print(f"変換後:{data}")
                         print("mapping ok")
-                        sp.write(line)
                         pl.write(data[0],data[1],data[2],branch)
+                        sp.write(line)
                         branch =0
                     elif tmp[0] == "A0" :
                         pl.up()
@@ -160,6 +160,7 @@ class Speaker :
 class Plotter :
     def __init__(self,ser):
         self.ser=ser
+        self.res="hoge"
     def mapping(self,line):
         num=line[1]#1番目のパラメータがスピーカ番号
         num = int(num)
@@ -192,11 +193,21 @@ class Plotter :
     def write(self,center_x,center_y,delay,branch):
         if branch :
             line = f'G0 X{center_x} Y{center_y}'
+            line = str(line) + '\n'
+            self.ser.write(line.encode('utf-8'))
+            while self.res != "Idle" :
+                tmp='?' + '\n'
+                self.ser.write(tmp.encode('utf-8'))
+                self.res = self.ser.readline()
+                self.res =self.res.decode('utf-8')
+                self.res= self.res[1:5]
+                print(self.res)
+                time.sleep(0.1)
             Plotter.down(self)
         else :
             line = f'G1 X{center_x} Y{center_y} F{delay}'
-        line = str(line) + '\n'
-        self.ser.write(line.encode('utf-8'))
+            line = str(line) + '\n'
+            self.ser.write(line.encode('utf-8'))
         print(f"送信: {line.strip()}")
     def reset(self):#プロッターを初期位置に戻す
         line = "G0 X0 Y0"+ "\n"
