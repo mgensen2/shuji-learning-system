@@ -280,10 +280,11 @@ void loop() {
         handleA3Command(p1);
       } else if (String(mode) == "C" && num_args == 4) { 
         Serial.printf("Executing C: CenterFreq=%d, Width=%d, VolAdjust=%d\n", p1, p2, p3);
-        handleCCommand(p1, p2, p3);
+        handleCCommand(p1, p2, p3)
       } else {
         Serial.println("Invalid command or wrong number of arguments.");
       }
     }
   }
 }
+

@@ -13,7 +13,7 @@ def main():
             print("スピーカアレイのシリアルポート選択\n")
             ser1 = select_port()
             sp = Speaker(ser1)
-            print("プロッタのシリアルポート選択\n")
+            print("\nプロッタのシリアルポート選択\n")
             ser2 = select_port()
             pl = Plotter(ser2)
             point = 0
@@ -28,8 +28,8 @@ def main():
                     print(tmp)
                     if tmp[0] == "C" :
                         pass
-                    elif tmp[0] == "A1" or  tmp[0] == "A2":
-                        print("判定ok")
+                    elif tmp[0] == "A1" or  tmp[0] == "A2": #
+                        print("ホワイトノイズorバンドパスok")
                         data = pl.mapping(tmp)
                         print(f"変換後:{data}")
                         print("mapping ok")
@@ -39,9 +39,11 @@ def main():
                     elif tmp[0] == "A0" :
                         pl.up()
                         branch = 1
+                    elif tmp[0] == "B1" or tmp[0] == "B2":
+                        print("複数命令スピーカ処理")
                     else :
                         print("形式が不正")
-        except Exception as e:
+        except Exception as e:#エラー表示
             print(f"エラーが発生しました: {e}")
         pl.up()
         pl.reset()
@@ -49,6 +51,7 @@ def main():
         yn=yes_no_input()
         if(yn==0):
             flag=0#nの場合，繰り返し処理終了
+            #ポートクローズ処理
             ser1.close()
             ser2.close()
 
@@ -60,29 +63,57 @@ def select_port(): #ポート選択関数
 
     ports = list_ports.comports()    # ポートデータを取得
     
-    devices = [info.device for info in ports]
+    import serial
+from serial.tools import list_ports
 
-    if len(devices) == 0:
-        # シリアル通信できるデバイスが見つからなかった場合
-        print("error: device not found")
+def select_port():
+    """
+    利用可能なシリアルポートをリスト表示し、ユーザーに選択させて、
+    そのポートを開いたserial.Serialオブジェクトを返す関数。
+    デバイスの説明も表示する。
+    """
+    ser = serial.Serial()
+    ser.baudrate = 115200  # ボーレート
+    ser.timeout = 0.1      # タイムアウトの時間
+
+    # 利用可能なシリアルポートの情報を取得
+    ports = list_ports.comports()
+
+    # ポートが見つからない場合
+    if not ports:
+        print("エラー: 利用可能なシリアルポートが見つかりません。")
         return None
-    elif len(devices) == 1:
-        print("only found %s" % devices[0])
-        ser.port = devices[0]
+
+    # ポートが1つだけ見つかった場合
+    if len(ports) == 1:
+        port = ports[0]
+        print(f"ポートが1つ見つかりました: {port.device} ({port.description})")
+        ser.port = port.device
+    # ポートが複数見つかった場合
     else:
-        # ポートが複数見つかった場合それらを表示し選択させる
-        for i in range(len(devices)):
-            print("input %3d: open %s" % (i,devices[i]))
-        print("input number of target port >> ",end="")
-        num = int(input())
-        ser.port = devices[num]
-    
-    # 開いてみる
+        print("利用可能なポート:")
+        # enumerateを使い、インデックスとポート情報を同時に取得して表示
+        for i, port in enumerate(ports):
+            print(f"  {i}: {port.device} - {port.description}")
+        
+        try:
+            # ユーザーに入力を促す
+            num = int(input("接続するポートの番号を入力してください >> "))
+            if num < 0 or num >= len(ports):
+                print("エラー: 無効な番号です。")
+                return None
+            ser.port = ports[num].device
+        except ValueError:
+            print("エラー: 数字で入力してください。")
+            return None
+
+    # 選択されたポートを開く
     try:
         ser.open()
+        print(f"ポート {ser.port} を開きました。")
         return ser
-    except:
-        print("error when opening serial")
+    except serial.SerialException as e:
+        print(f"エラー: ポートを開けませんでした - {e}")
         return None
 
 def select_file():
@@ -107,7 +138,7 @@ def select_file():
                 print("無効な番号です。")
         except ValueError:
             print("数値を入力してください。")
-
+#yes or no判定関数
 def yes_no_input():
     while True:
         choice = input("Please respond with 'yes' or 'no' [y/N]: ").lower()
@@ -167,13 +198,13 @@ class Plotter :
         line = str(line) + '\n'
         self.ser.write(line.encode('utf-8'))
         print(f"送信: {line.strip()}")
-    def reset(self):
+    def reset(self):#プロッターを初期位置に戻す
         line = "G0 X0 Y0"+ "\n"
         self.ser.write(line.encode('utf-8'))
-    def down(self) :
+    def down(self) :#ホルダー下げ
         line = "G0 Z8" + "\n"
         self.ser.write(line.encode('utf-8'))
-    def up(self) :
+    def up(self) :#ホルダー上げ
         line= "G0 Z0" + "\n"
         self.ser.write(line.encode('utf-8'))
 #おまじない
