@@ -84,17 +84,17 @@ void setup() {
   //[cite start] 案内メッセージにB1, B2を追加
   Serial.println("\nSetup Complete. Enter command.");
   Serial.println("Play White Noise (A): A1 (SpeakerID) (Time_ms) (Volume)");
-  Serial.println("   ex) A1 32 500 120");
+  Serial.println("   ex A1 32 500 120");
   Serial.println("Play Bandpass (A):    A2 (SpeakerID) (Time_ms) (Volume)");
-  Serial.println("   ex) A2 1 1000 100");
+  Serial.println("   ex A2 1 1000 100");
   Serial.println("Play White Noise (B): B1 (SpeakerID) (Time_ms) (Volume)");
-  Serial.println("   ex) B1 32 500 120");
+  Serial.println("   ex B1 32 500 120");
   Serial.println("Play Bandpass (B):    B2 (SpeakerID) (Time_ms) (Volume)");
-  Serial.println("   ex) B2 1 1000 100");
+  Serial.println("   ex B2 1 1000 100");
   Serial.println("Stop Sound Early:     A3 (SpeakerID)");
-  Serial.println("   ex) A3 32");
+  Serial.println("   ex A3 32");
   Serial.println("Configure Filter:     C (CenterFreq) (Width) (VolAdjust)");
-  Serial.println("   ex) C 1500 500 0");
+  Serial.println("   ex C 1500 500 0");
 }
 
 
@@ -195,9 +195,6 @@ void handleA2Command(int speakerId, int duration, int volume) {
 }
 
 
-// =================================================================
-// ▼▼▼ ここからが新しく追加したB1, B2コマンドの処理関数です ▼▼▼
-// =================================================================
 
 //[cite start] ホワイトノイズ再生コマンド (B1) の処理 (A1のコピー)
 void handleB1Command(int speakerId, int duration, int volume) {
@@ -257,16 +254,8 @@ void handleB2Command(int speakerId, int duration, int volume) {
   esp_now_send(slave.peer_addr, data, sizeof(data));
   delay(duration);
 
-  data[1] = 17;
-  data[3] = 17;
-  printDataForDebug("B2 Stop Packet", data, sizeof(data));
-  esp_now_send(slave.peer_addr, data, sizeof(data));
-  delay(10);
 }
 
-// =================================================================
-// ▲▲▲ ここまでが新しく追加したB1, B2コマンドの処理関数です ▲▲▲
-// =================================================================
 
 
 //[cite start] 停止コマンド (A3) の処理
@@ -312,6 +301,10 @@ void handleA3Command(int speakerId) {
   delay(10); //[cite start] 念のため短いディレイを入れます
 }
 
+void handleD1Command(int duration) {
+  delay(duration);
+}
+
 
 //[cite start] コンフィグモードコマンド (C) の処理
 void handleCCommand(int centerFreq, int width, int volAdjust) {
@@ -351,17 +344,17 @@ void loop() {
       } else if (String(mode) == "A2" && num_args == 4) { 
         Serial.printf("Executing A2: Speaker=%d, Duration=%dms, Volume=%d\n", p1, p2, p3);
         handleA2Command(p1, p2, p3);
-      // ▼▼▼ B1, B2コマンドの処理分岐を追加 ▼▼▼
       } else if (String(mode) == "B1" && num_args == 4) { 
         Serial.printf("Executing B1: Speaker=%d, Duration=%dms, Volume=%d\n", p1, p2, p3);
         handleB1Command(p1, p2, p3);
       } else if (String(mode) == "B2" && num_args == 4) { 
         Serial.printf("Executing B2: Speaker=%d, Duration=%dms, Volume=%d\n", p1, p2, p3);
         handleB2Command(p1, p2, p3);
-      // ▲▲▲ B1, B2コマンドの処理分岐を追加 ▲▲▲
       } else if (String(mode) == "A3" && num_args == 2) {
         Serial.printf("Executing A3: Stop Speaker=%d\n", p1);
         handleA3Command(p1);
+      } else if (String(mode) == "D1" && num_args == 2) {
+        handleD1Command(p1);
       } else if (String(mode) == "C" && num_args == 4) { 
         Serial.printf("Executing C: CenterFreq=%d, Width=%d, VolAdjust=%d\n", p1, p2, p3);
         handleCCommand(p1, p2, p3);
