@@ -63,14 +63,14 @@ const char* preset2[] = {
 // プリセット3: 複数のスピーカを同時に鳴らして止める（Bコマンドを利用）
 const char* preset3[] = {
   "B1 1 10 120",   // 4つのスピーカに再生コマンドを連続送信
-  "B1 8 10 120",
-  "B1 57 10 120",
-  "B1 64 10 120",
+  "B1 2 10 120",
+  "B1 3 10 120",
+  "B1 4 10 120",
   "D1 1000",       // 1秒待機
   "A3 1",          // 4つのスピーカに停止コマンドを送信
-  "A3 8",
-  "A3 57",
-  "A3 64"
+  "A3 2",
+  "A3 3",
+  "A3 4"
 };
 
 
@@ -276,7 +276,6 @@ void handleB1Command(int speakerId, int duration, int volume) {
 
   printDataForDebug("B1 Play Packet", data, sizeof(data));
   esp_now_send(slave.peer_addr, data, sizeof(data));
-  delay(duration);
 }
 
 // バンドパスモード再生コマンド (B2) の処理 (停止なし)
@@ -303,7 +302,6 @@ void handleB2Command(int speakerId, int duration, int volume) {
 
   printDataForDebug("B2 Play Packet", data, sizeof(data));
   esp_now_send(slave.peer_addr, data, sizeof(data));
-  delay(duration);
 }
 
 // コンフィグモードコマンド (C) の処理
