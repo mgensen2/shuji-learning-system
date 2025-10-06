@@ -1,0 +1,438 @@
+#include <esp_now.h>
+#include <WiFi.h>
+
+/*
+コマンド解説
+コマンド基本の並び
+(再生モード) (引数1) (引数2) (引数3)
+※コマンドと引数の間は半角スペースで区切ること
+
+再生モード種別
+・A1 (スピーカ番号) (再生時間ms) (ボリューム)
+  指定したスピーカでホワイトノイズを再生し、指定時間後に停止信号を送る
+
+・A2 (スピーカ番号) (再生時間ms) (ボリューム)
+  指定したスピーカでバンドパスノイズを再生し、指定時間後に停止信号を送る
+
+・A3 (スピーカ番号)
+  指定したスピーカに停止信号を送る
+
+・B1 (スピーカ番号) (再生時間ms) (ボリューム)
+  指定したスピーカでホワイトノイズを再生する（停止信号は送らない）
+
+・B2 (スピーカ番号) (再生時間ms) (ボリューム)
+  指定したスピーカでバンドパスノイズを再生する（停止信号は送らない）
+
+・C (中心周波数Hz) (周波数幅Hz) (音量調整)
+  バンドパスノイズ(A2, B2)のフィルタ設定を変更する
+  ※音量調整: 0=そのまま, 1=下げる, 2=上げる
+
+・D1 (待機時間ms)
+  指定した時間だけプログラムを待機させる
+
+・P (プリセット番号)
+  あらかじめ定義されたコマンドシーケンスを実行する
+*/
+
+//=================================================================
+// ▼▼▼ プリセット定義セクション ▼▼▼
+// ここで実行したいコマンドの組み合わせを自由に追加・編集できます。
+//=================================================================
+
+// プリセット1: スピーカ1番から8番までを順番に鳴らす
+const char* preset1[] = {
+  "A1 1 150 120",
+  "A1 2 150 120",
+  "A1 3 150 120",
+  "A1 4 150 120",
+  "C 2000 800 0",
+  "A2 5 150 120",
+  "C 1000 400 2",
+  "A2 6 150 120",
+  "A2 7 150 120",
+  "A2 8 150 120"
+};
+
+// プリセット2: バンドパスフィルタを設定し、異なる2つのスピーカを鳴らす
+const char* preset2[] = {
+  "C 2000 800 0",
+  "A2 10 500 110",
+  "A2 20 500 110"
+};
+
+// プリセット3: 複数のスピーカを同時に鳴らして止める（Bコマンドを利用）
+const char* preset3[] = {
+  "B1 1 10 120",   // 4つのスピーカに再生コマンドを連続送信
+  "B1 8 10 120",
+  "B1 57 10 120",
+  "B1 64 10 120",
+  "D1 1000",       // 1秒待機
+  "A3 1",          // 4つのスピーカに停止コマンドを送信
+  "A3 8",
+  "A3 57",
+  "A3 64"
+};
+
+
+// --- システム用定義 (通常は編集不要) ---
+// 作成したプリセットをここに登録します
+const char** presets[] = { preset1, preset2, preset3 };
+// 各プリセットのコマンド数を自動計算します
+const int preset_sizes[] = {
+  sizeof(preset1) / sizeof(preset1[0]),
+  sizeof(preset2) / sizeof(preset2[0]),
+  sizeof(preset3) / sizeof(preset3[0])
+};
+const int NUM_PRESETS = sizeof(presets) / sizeof(presets[0]);
+//=================================================================
+// ▲▲▲ プリセット定義セクションはここまで ▲▲▲
+//=================================================================
+
+
+// ESP-NOWのピア情報（ブロードキャスト用）
+esp_now_peer_info_t slave;
+
+// バンドパスモード（A2, B2コマンド）で使用する設定値を保持するグローバル変数
+uint16_t bandpassCenterFreq = 1000; // 中心周波数 (Hz)
+uint16_t bandpassWidth = 500;       // 周波数幅 (Hz)
+uint8_t bandpassVolAdjust = 0;      // 音量微調整 (0:そのまま, 1:下げる, 2:上げる)
+
+// --- 各種関数定義 ---
+
+// データ送信完了時のコールバック関数
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+  Serial.print("Last Packet Sent to: ");
+  Serial.println(macStr);
+  Serial.print("Last Packet Send Status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+// 送信するdata配列の内容をシリアルモニタに表示する関数
+void printDataForDebug(const char* title, const uint8_t* data, size_t size) {
+  Serial.print("--- DEBUG: Sending ");
+  Serial.print(title);
+  Serial.println(" ---");
+  Serial.print("Data Bytes (HEX): ");
+  for (size_t i = 0; i < size; i++) {
+    if (data[i] < 0x10) {
+      Serial.print("0"); // 1桁の16進数の場合、見やすさのために0を補完
+    }
+    Serial.print(data[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println("\n---------------------------------");
+}
+
+// スピーカ番号(1-64)から、スレーブユニット用の位置情報に変換する関数
+void getSpeakerLocation(int speakerId, int &redFrame, bool &isBlueFrame, int &speakerInFrame) {
+  if (speakerId < 1 || speakerId > 64) {
+    redFrame = -1; // エラーを示す
+    return;
+  }
+  // スピーカ番号を 行(1-8)と列(1-8)に変換
+  int row = (speakerId - 1) / 8 + 1;
+  int col = (speakerId - 1) % 8 + 1;
+
+  // 仕様書に基づき、各種パラメータを計算
+  redFrame = (col - 1) / 2 + 1; // 赤枠(1-4)の計算
+  isBlueFrame = (row > 4); // 緑枠(1-4行)か青枠(5-8行)かを判断
+
+  // 緑/青枠内のスピーカ番号(1-8)を計算
+  int localRow = isBlueFrame ? (row - 4) : row;
+  speakerInFrame = (localRow - 1) * 2 + (col % 2 == 0 ? 2 : 1);
+}
+
+// --- コマンド処理関数 ---
+
+// ホワイトノイズ再生コマンド (A1) の処理
+void handleA1Command(int speakerId, int duration, int volume) {
+  int redFrame;
+  bool isBlueFrame;
+  int speakerInFrame;
+  getSpeakerLocation(speakerId, redFrame, isBlueFrame, speakerInFrame);
+  if (redFrame == -1) { return; }
+
+  uint8_t data[12];
+
+  // ホワイトノイズの仕様に従ってdata[0]からdata[5]を設定
+  data[0] = redFrame;
+  data[1] = 8;
+  data[2] = volume;
+  data[3] = 8;
+  if (isBlueFrame) { data[4] = 1 << (speakerInFrame - 1); data[5] = 0; }
+  else { data[4] = 0; data[5] = 1 << (speakerInFrame - 1); }
+
+  // 残りのdata[6]からdata[11]までを0で埋める
+  for (int i = 6; i < 12; i++) {
+    data[i] = 0;
+  }
+
+  // 再生コマンドを送信
+  printDataForDebug("A1 Play Packet", data, sizeof(data));
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+
+  // 指定された時間待機
+  delay(duration);
+
+  // 停止コマンドを作成して送信
+  data[1] = 17;
+  data[3] = 17;
+  printDataForDebug("A1 Stop Packet", data, sizeof(data));
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(10);
+}
+
+// バンドパスモード再生コマンド (A2) の処理
+void handleA2Command(int speakerId, int duration, int volume) {
+  int redFrame;
+  bool isBlueFrame;
+  int speakerInFrame;
+  getSpeakerLocation(speakerId, redFrame, isBlueFrame, speakerInFrame);
+  if (redFrame == -1) { return; }
+
+  uint8_t data[12];
+  data[0] = redFrame;
+  data[1] = 14;
+  data[2] = 0;
+  data[3] = 14;
+  if (isBlueFrame) { data[4] = 1 << (speakerInFrame - 1); data[5] = 0; }
+  else { data[4] = 0; data[5] = 1 << (speakerInFrame - 1); }
+  data[6] = (bandpassCenterFreq >> 8) & 0xFF;
+  data[7] = bandpassCenterFreq & 0xFF;
+  data[8] = (bandpassWidth >> 8) & 0xFF;
+  data[9] = bandpassWidth & 0xFF;
+  data[10] = bandpassVolAdjust;
+  data[11] = volume;
+
+  // 再生コマンドを送信
+  printDataForDebug("A2 Play Packet", data, sizeof(data));
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+
+  // 指定された時間待機
+  delay(duration);
+
+  // 停止コマンドを作成して送信
+  data[1] = 17;
+  data[3] = 17;
+  printDataForDebug("A2 Stop Packet", data, sizeof(data));
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(10);
+}
+
+// 停止コマンド (A3) の処理
+void handleA3Command(int speakerId) {
+  int redFrame;
+  bool isBlueFrame;
+  int speakerInFrame;
+  getSpeakerLocation(speakerId, redFrame, isBlueFrame, speakerInFrame);
+  if (redFrame == -1) { return; }
+
+  uint8_t data[12];
+
+  data[0] = redFrame;
+  data[1] = 17;
+  data[2] = 0;
+  data[3] = 17;
+  if (isBlueFrame) {
+    data[4] = 1 << (speakerInFrame - 1);
+    data[5] = 0;
+  } else {
+    data[4] = 0;
+    data[5] = 1 << (speakerInFrame - 1);
+  }
+
+  for (int i = 6; i < 12; i++) {
+    data[i] = 0;
+  }
+  
+  printDataForDebug("A3 Stop Packet", data, sizeof(data));
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(10);
+}
+
+// ホワイトノイズ再生コマンド (B1) の処理 (停止なし)
+void handleB1Command(int speakerId, int duration, int volume) {
+  int redFrame;
+  bool isBlueFrame;
+  int speakerInFrame;
+  getSpeakerLocation(speakerId, redFrame, isBlueFrame, speakerInFrame);
+  if (redFrame == -1) { return; }
+
+  uint8_t data[12];
+
+  data[0] = redFrame;
+  data[1] = 8;
+  data[2] = volume;
+  data[3] = 8;
+  if (isBlueFrame) { data[4] = 1 << (speakerInFrame - 1); data[5] = 0; }
+  else { data[4] = 0; data[5] = 1 << (speakerInFrame - 1); }
+
+  for (int i = 6; i < 12; i++) {
+    data[i] = 0;
+  }
+
+  printDataForDebug("B1 Play Packet", data, sizeof(data));
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(duration);
+}
+
+// バンドパスモード再生コマンド (B2) の処理 (停止なし)
+void handleB2Command(int speakerId, int duration, int volume) {
+  int redFrame;
+  bool isBlueFrame;
+  int speakerInFrame;
+  getSpeakerLocation(speakerId, redFrame, isBlueFrame, speakerInFrame);
+  if (redFrame == -1) { return; }
+
+  uint8_t data[12];
+  data[0] = redFrame;
+  data[1] = 14;
+  data[2] = 0;
+  data[3] = 14;
+  if (isBlueFrame) { data[4] = 1 << (speakerInFrame - 1); data[5] = 0; }
+  else { data[4] = 0; data[5] = 1 << (speakerInFrame - 1); }
+  data[6] = (bandpassCenterFreq >> 8) & 0xFF;
+  data[7] = bandpassCenterFreq & 0xFF;
+  data[8] = (bandpassWidth >> 8) & 0xFF;
+  data[9] = bandpassWidth & 0xFF;
+  data[10] = bandpassVolAdjust;
+  data[11] = volume;
+
+  printDataForDebug("B2 Play Packet", data, sizeof(data));
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(duration);
+}
+
+// コンフィグモードコマンド (C) の処理
+void handleCCommand(int centerFreq, int width, int volAdjust) {
+  bandpassCenterFreq = centerFreq;
+  bandpassWidth = width;
+  bandpassVolAdjust = volAdjust;
+
+  Serial.println("--- Bandpass Filter Config Updated ---");
+  Serial.printf("Center Frequency: %d Hz\n", bandpassCenterFreq);
+  Serial.printf("Bandwidth: %d Hz\n", bandpassWidth);
+  Serial.print("Volume Adjust: ");
+  if(volAdjust == 0) Serial.println("Keep");
+  else if(volAdjust == 1) Serial.println("Down");
+  else if(volAdjust == 2) Serial.println("Up");
+  Serial.println("------------------------------------");
+}
+
+// 待機コマンド (D1) の処理
+void handleD1Command(int duration) {
+  Serial.printf("Executing D1: Delaying for %dms\n", duration);
+  delay(duration);
+}
+
+// プリセット実行コマンド (P) の処理
+void handlePCommand(int presetNum);
+void executeCommand(String command); // プロトタイプ宣言
+
+void handlePCommand(int presetNum) {
+  int presetIndex = presetNum - 1; // ユーザーは1から、配列は0から始まるため調整
+  if (presetIndex < 0 || presetIndex >= NUM_PRESETS) {
+    Serial.println("Error: Preset number out of range.");
+    return;
+  }
+
+  Serial.printf("\n--- Executing Preset %d ---\n", presetNum);
+  for (int i = 0; i < preset_sizes[presetIndex]; i++) {
+    String command_str = presets[presetIndex][i];
+    executeCommand(command_str);
+  }
+  Serial.printf("--- Preset %d Finished ---\n\n", presetNum);
+}
+
+// --- コマンドパーサーとメインロジック ---
+
+// 文字列コマンドを解釈して適切な処理関数を呼び出す
+void executeCommand(String command) {
+  command.trim();
+  if (command.length() == 0) return;
+
+  char mode[3];
+  int p1 = 0, p2 = 0, p3 = 0;
+  int num_args = sscanf(command.c_str(), "%s %d %d %d", mode, &p1, &p2, &p3);
+
+  if (num_args >= 1) {
+    if (String(mode) == "A1" && num_args == 4) {
+      Serial.printf("Executing A1: Speaker=%d, Duration=%dms, Volume=%d\n", p1, p2, p3);
+      handleA1Command(p1, p2, p3);
+    } else if (String(mode) == "A2" && num_args == 4) {
+      Serial.printf("Executing A2: Speaker=%d, Duration=%dms, Volume=%d\n", p1, p2, p3);
+      handleA2Command(p1, p2, p3);
+    } else if (String(mode) == "A3" && num_args == 2) {
+      Serial.printf("Executing A3: Stop Speaker=%d\n", p1);
+      handleA3Command(p1);
+    } else if (String(mode) == "B1" && num_args == 4) {
+      Serial.printf("Executing B1: Speaker=%d, Duration=%dms, Volume=%d\n", p1, p2, p3);
+      handleB1Command(p1, p2, p3);
+    } else if (String(mode) == "B2" && num_args == 4) {
+      Serial.printf("Executing B2: Speaker=%d, Duration=%dms, Volume=%d\n", p1, p2, p3);
+      handleB2Command(p1, p2, p3);
+    } else if (String(mode) == "C" && num_args == 4) {
+      Serial.printf("Executing C: CenterFreq=%d, Width=%d, VolAdjust=%d\n", p1, p2, p3);
+      handleCCommand(p1, p2, p3);
+    } else if (String(mode) == "D1" && num_args == 2) {
+      handleD1Command(p1);
+    } else if (String(mode) == "P" && num_args == 2) {
+      handlePCommand(p1);
+    } else {
+      Serial.print("Invalid command or wrong number of arguments: ");
+      Serial.println(command);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // ESP-NOW初期化
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESPNow Init Failed");
+    ESP.restart();
+  }
+
+  // マルチキャスト（ブロードキャスト）用Slave登録
+  memset(&slave, 0, sizeof(slave));
+  for (int i = 0; i < 6; ++i) { slave.peer_addr[i] = (uint8_t)0xff; }
+  if (esp_now_add_peer(&slave) != ESP_OK) {
+    Serial.println("Pair failed");
+  }
+
+  // ESP-NOWコールバック登録
+  esp_now_register_send_cb(OnDataSent);
+
+  delay(1000);
+
+  Serial.println("\nSetup Complete. Enter command.");
+  Serial.println("Play White Noise (Auto Stop): A1 (SpeakerID) (Time_ms) (Volume)");
+  Serial.println("  ex) A1 32 500 120");
+  Serial.println("Play Bandpass (Auto Stop):    A2 (SpeakerID) (Time_ms) (Volume)");
+  Serial.println("  ex) A2 1 1000 100");
+  Serial.println("Play White Noise (No Stop):   B1 (SpeakerID) (Time_ms) (Volume)");
+  Serial.println("  ex) B1 32 500 120");
+  Serial.println("Play Bandpass (No Stop):      B2 (SpeakerID) (Time_ms) (Volume)");
+  Serial.println("  ex) B2 1 1000 100");
+  Serial.println("Stop Sound Early:             A3 (SpeakerID)");
+  Serial.println("  ex) A3 32");
+  Serial.println("Configure Filter:             C (CenterFreq) (Width) (VolAdjust)");
+  Serial.println("  ex) C 1500 500 0");
+  Serial.println("Delay:                        D1 (Time_ms)");
+  Serial.println("  ex) D1 1000");
+  Serial.println("Execute Preset:               P (Preset#)");
+  Serial.println("  ex) P 1");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    executeCommand(command);
+  }
+}
