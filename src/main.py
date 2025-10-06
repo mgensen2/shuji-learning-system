@@ -203,6 +203,7 @@ class Plotter :
         line= "G0 Z0" + "\n"
         self.ser.write(line.encode('utf-8'))
     def sync(self) : #タイミング同調
+        print("sync start\n")
         while self.res != "Idle" :
             tmp='?' + '\n'
             self.ser.write(tmp.encode('utf-8'))
@@ -211,6 +212,7 @@ class Plotter :
             self.res= self.res[1:5]
             print(self.res)
             time.sleep(0.01)
+        print("sync end\n")
 
 
 #おまじない
