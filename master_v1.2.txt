@@ -221,11 +221,7 @@ void handleB1Command(int speakerId, int duration, int volume) {
   esp_now_send(slave.peer_addr, data, sizeof(data));
   delay(duration);
 
-  data[1] = 17;
-  data[3] = 17;
-  printDataForDebug("B1 Stop Packet", data, sizeof(data));
-  esp_now_send(slave.peer_addr, data, sizeof(data));
-  delay(10);
+  
 }
 
 //[cite start] バンドパスモード再生コマンド (B2) の処理 (A2のコピー)
@@ -275,6 +271,9 @@ void handleA3Command(int speakerId) {
 
   //[cite start] data[0], [4], [5] にスピーカの位置情報を設定
   data[0] = redFrame;
+  data[1] = 17;
+  data[2] = 0;
+  data[3] = 17;
   if (isBlueFrame) {
     data[4] = 1 << (speakerInFrame - 1);
     data[5] = 0;
@@ -282,13 +281,10 @@ void handleA3Command(int speakerId) {
     data[4] = 0;
     data[5] = 1 << (speakerInFrame - 1);
   }
-
-  //[cite start] data[1], [3] に停止モード(17)を設定
-  data[1] = 17;
-  data[3] = 17;
+  
 
   //[cite start] 残りのバイト（音量や周波数など）は停止に関係ないため0で埋めます
-  data[2] = 0;
+  
   for (int i = 6; i < 12; i++) {
     data[i] = 0;
   }
