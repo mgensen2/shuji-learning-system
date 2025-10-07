@@ -34,19 +34,33 @@ def main():
                         data = pl.mapping(tmp)
                         print(f"変換後:{data}")
                         print("mapping ok")
+                        if branch :
+                            pl.down()
+                            branch=0
                         pl.write(data[0],data[1],data[2],branch)
                         sp.write(line)
-                        branch =0
                     elif tmp[0] == "A0" :
                         pl.up()
                         branch = 1
+                        data = pl.mapping(tmp)
+                        print(f"変換後:{data}")
+                        print("mapping ok")
+                        pl.write(data[0],data[1],data[2],branch)
+                        time.sleep(0.5)
                     elif tmp[0] == "B1" or tmp[0] == "B2":
                         print("複数命令スピーカ処理\n")
+                    elif tmp[0] == "D1":
+                        delay = (int(tmp[1]) / 1000) + 0.1
+                        print(f"delay処理:{delay}ms\n")
+                        time.sleep(delay)
                     else :
                         print("形式が不正\n")
+                    pl.sync()
         except Exception as e:#エラー表示
             print(f"エラーが発生しました: {e}")
-        pl.up()
+        except KeyboardInterrupt:
+            print("処理を中断しました。")
+        time.sleep(0.5)
         pl.reset()
         print("つづけますか？\n")
         yn=yes_no_input()
@@ -185,15 +199,13 @@ class Plotter :
             line = f'G0 X{center_x} Y{center_y}'
             line = str(line) + '\n'
             self.ser.write(line.encode('utf-8'))
-            Plotter.sync(self)
-            Plotter.down(self)
         else :
             line = f'G1 X{center_x} Y{center_y} F{delay}'
             line = str(line) + '\n'
             self.ser.write(line.encode('utf-8'))
         print(f"送信: {line.strip()}")
     def reset(self):#プロッターを初期位置に戻す
-        line = "G0 X0 Y0"+ "\n"
+        line = "G0 X0 Y0 Z0"+ "\n"
         self.ser.write(line.encode('utf-8'))
     def down(self) :#ホルダー下げ
         line = "G0 Z8" + "\n"
@@ -203,14 +215,32 @@ class Plotter :
         self.ser.write(line.encode('utf-8'))
     def sync(self) : #タイミング同調
         print("sync start\n")
-        while self.res != "Idle" :
-            tmp='?' + '\n'
-            self.ser.write(tmp.encode('utf-8'))
-            self.res = self.ser.readline()
-            self.res =self.res.decode('utf-8')
-            self.res= self.res[1:5]
-            print(self.res)
-            time.sleep(0.0001)
+        while True:
+            try:
+        # ステータスレポートを要求する '?' を送信
+                self.ser.write(b'?\n')
+
+        # GRBLからの応答を1行読み込む
+                response = self.ser.readline().decode('utf-8').strip()
+
+        # ステータスレポート（例: <Idle|MPos:10.000,0.000,0.000|FS:0,0>）かチェック
+                if response.startswith('<') and response.endswith('>'):
+                    print(f"ステータス: {response}")
+
+            # 応答に 'Idle' が含まれていたら、移動完了と判断
+                    if 'Idle' in response:
+                        print("\n移動が完了しました")
+                        break
+        
+        
+        # CPUに負荷をかけすぎないように少し待つ
+                time.sleep(0.1)
+            except serial.SerialException as e:
+                print(f"シリアル通信エラー: {e}")
+                break
+            except KeyboardInterrupt:
+                print("処理を中断しました。")
+                break
         print("sync end\n")
 
 
