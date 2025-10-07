@@ -191,7 +191,6 @@ class Plotter :
             line = f'G1 X{center_x} Y{center_y} F{delay}'
             line = str(line) + '\n'
             self.ser.write(line.encode('utf-8'))
-            Plotter.sync(self)
         print(f"送信: {line.strip()}")
     def reset(self):#プロッターを初期位置に戻す
         line = "G0 X0 Y0"+ "\n"
@@ -211,7 +210,7 @@ class Plotter :
             self.res =self.res.decode('utf-8')
             self.res= self.res[1:5]
             print(self.res)
-            time.sleep(0.01)
+            time.sleep(0.0001)
         print("sync end\n")
 
 
