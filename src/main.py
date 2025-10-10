@@ -16,6 +16,7 @@ def main():
             print("\nプロッタのシリアルポート選択\n")
             ser2 = select_port()
             pl = Plotter(ser2)
+            pl.reset()
             point = 0
         print("読み込みファイルを選択\n")
         file = select_file()
