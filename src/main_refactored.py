@@ -3,6 +3,7 @@ from serial.tools import list_ports
 import time
 import os
 import threading
+import subprocess
 
 def main():
     print("習字学習システム\n")
@@ -59,6 +60,11 @@ def handle_command(tmp, pl, sp):
         pl.up()    # ペンを上げる
         data = pl.mapping(tmp)
         print(f"変換後:{data}")
+        # A0カウントに応じた音声を再生（非同期）
+        try:
+            sp.play_a0_sound()
+        except Exception as e:
+            print(f"音声再生エラー: {e}")
         pl.write(*data, branch=1)
         time.sleep(0.5)
     elif cmd in ("B1", "B2"):
@@ -134,14 +140,53 @@ def yes_no_input(msg="Please respond with 'yes' or 'no' [y/N]: "):
             return False
 
 class Speaker:
-    def __init__(self, ser):
+    def __init__(self, ser, sounds_dirs=None):
         self.ser = ser
+        # 再生候補を検索するディレクトリ一覧
+        self.sounds_dirs = sounds_dirs or ['.', './sounds']
+        # A0 の呼び出し回数カウンタ（初回A0で1になる）
+        self.a0_count = 0
+
     def write(self, line):
         line = str(line) + '\n'
         self.ser.write(line.encode('utf-8'))
         print(f"送信: {line.strip()}")
         time.sleep(0.1)
         print("送信が完了しました。")
+
+    def _find_file_for_index(self, index):
+        base = f"{index:03d}"
+        exts = ('.mp3', '.wav', '.m4a', '.aiff', '.aif', '.aac')
+        for d in self.sounds_dirs:
+            if not os.path.isdir(d):
+                continue
+            for f in os.listdir(d):
+                name_lower = f.lower()
+                # 接頭辞が 001 などに一致するファイルを優先して探す
+                if name_lower.startswith(base) and name_lower.endswith(exts):
+                    return os.path.join(d, f)
+            # 直接拡張子付きファイル名を検索（例: ./001.mp3）
+            for ext in exts:
+                p = os.path.join(d, base + ext)
+                if os.path.exists(p):
+                    return p
+        return None
+
+    def play_a0_sound(self):
+        # カウントを増やして対応するファイル名を探す
+        self.a0_count += 1
+        path = self._find_file_for_index(self.a0_count)
+        if not path:
+            print(f"A0回数 {self.a0_count} に対応する音声ファイルが見つかりません（検索先: {self.sounds_dirs}）。")
+            return
+        # macOS の afplay を使って非同期再生
+        try:
+            subprocess.Popen(['afplay', path])
+            print(f"音声を再生しました: {path}")
+        except FileNotFoundError:
+            print("afplay が見つかりません。別の方法で再生してください。")
+        except Exception as e:
+            print(f"音声再生エラー: {e}")
 
 class Plotter:
     def __init__(self, ser):
