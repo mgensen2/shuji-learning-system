@@ -4,7 +4,6 @@ import time
 import os
 import threading
 import subprocess
-import queue
 
 def main():
     print("習字学習システム\n")
@@ -12,6 +11,7 @@ def main():
     sp = Speaker(ser1)
     ser2 = select_port("プロッタのシリアルポート選択")
     pl = Plotter(ser2)
+
     while True:
         file = select_file()
         if not file:
@@ -20,7 +20,6 @@ def main():
         try:
             with open(file, 'r') as f:
                 print(f"'{file}'の内容で動作を開始します．．．")
-
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -35,44 +34,29 @@ def main():
             break
         time.sleep(0.5)
         pl.reset()
-        # 続けますかで 'y' を押したときに A0 カウントをリセット
-        cont = yes_no_input("つづけますか？")
-        if cont:
-            sp.a0_count = 0
-        else:
+        if not yes_no_input("つづけますか？"):
             break
-    # ワーカー停止してからシリアルを閉じる
-    try:
-        sp.stop()
-    except Exception:
-        pass
-    if ser1:
-        try:
-            ser1.close()
-        except Exception:
-            pass
-    if ser2:
-        try:
-            ser2.close()
-        except Exception:
-            pass
+        sp.a0_count=0  # A0カウントをリセット
+    ser1.close()
+    ser2.close()
 
 def handle_command(tmp, pl, sp):
     cmd = tmp[0]
     if cmd == "C":
-        print("config命令（キューに積む）\n")
-        # キューに入れてバーストを間引く/バッチ化
-        sp.enqueue(' '.join(tmp))
+        print("config命令\n")
+        # ここに設定処理を追加可能
     elif cmd in ("A1", "A2"):
         print("ホワイトノイズorバンドパスok")
         pl.down()  # ペンを下げる
         data = pl.mapping(tmp)
         print(f"変換後:{data}")
-        # plotterは優先で直接スレッドに投げる。スピーカはキューへ
+        # 並列実行
         t_plotter = threading.Thread(target=pl.write, args=(*data,), kwargs={'branch': 0})
+        t_speaker = threading.Thread(target=sp.write, args=(' '.join(tmp),))
         t_plotter.start()
-        sp.enqueue(' '.join(tmp))
+        t_speaker.start()
         t_plotter.join()
+        t_speaker.join()
     elif cmd == "A0":
         pl.up()    # ペンを上げる
         data = pl.mapping(tmp)
@@ -85,8 +69,8 @@ def handle_command(tmp, pl, sp):
         pl.write(*data, branch=1)
         time.sleep(0.5)
     elif cmd in ("B1", "B2"):
-        print("複数命令スピーカ処理（キューへ）\n")
-        sp.enqueue(' '.join(tmp))
+        print("複数命令スピーカ処理\n")
+        # 実装例: sp.write(' '.join(tmp))
     elif cmd == "D1":
         delay = (int(tmp[1]) / 1000) + 0.1
         print(f"delay処理:{delay}ms\n")
@@ -164,65 +148,12 @@ class Speaker:
         # A0 の呼び出し回数カウンタ（初回A0で1になる）
         self.a0_count = 0
 
-        # キューとワーカー（Cコマンド等の間引き・バッチ送信用）
-        self._q = queue.Queue()
-        self._stop_event = threading.Event()
-        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
-        self._worker.start()
-
     def write(self, line):
-        line = str(line).strip() + '\n'
-        try:
-            if self.ser:
-                self.ser.write(line.encode('utf-8'))
-            print(f"送信: {line.strip()}")
-            # 軽いウェイトで連続送信の負荷を低減
-            time.sleep(0.01)
-        except Exception as e:
-            print(f"Speaker write error: {e}")
-
-    def enqueue(self, line):
-        # 非同期で送る（バーストはワーカーで間引かれる）
-        try:
-            self._q.put(line)
-        except Exception as e:
-            print(f"enqueue error: {e}")
-
-    def _worker_loop(self):
-        # バースト時は最後のコマンドだけを送る（短時間の連続Cを間引く）
-        BATCH_INTERVAL = 0.05  # 50ms
-        while not self._stop_event.is_set():
-            try:
-                item = self._q.get(timeout=BATCH_INTERVAL)
-                latest = item
-                # すぐに溜まった分を取り出して最後のものだけにする
-                while True:
-                    try:
-                        nxt = self._q.get_nowait()
-                        latest = nxt
-                    except queue.Empty:
-                        break
-                self._send_raw(latest)
-            except queue.Empty:
-                continue
-        # 終了時に残りをフラッシュ
-        while True:
-            try:
-                item = self._q.get_nowait()
-                self._send_raw(item)
-            except queue.Empty:
-                break
-
-    def _send_raw(self, line):
-        try:
-            # write は改行を追加するのでそのまま渡す
-            self.write(line)
-        except Exception as e:
-            print(f"Speaker send error: {e}")
-
-    def stop(self):
-        self._stop_event.set()
-        self._worker.join(timeout=1)
+        line = str(line) + '\n'
+        self.ser.write(line.encode('utf-8'))
+        print(f"送信: {line.strip()}")
+        time.sleep(0.1)
+        print("送信が完了しました。")
 
     def _find_file_for_index(self, index):
         base = f"{index:03d}"
@@ -291,7 +222,7 @@ class Plotter:
         line = "G0 X0 Y0 Z0\n"
         self.ser.write(line.encode('utf-8'))
     def down(self):
-        line = "G0 Z8\n"
+        line = "G0 Z10\n"
         self.ser.write(line.encode('utf-8'))
     def up(self):
         line = "G0 Z0\n"
