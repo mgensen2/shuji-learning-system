@@ -4,43 +4,52 @@ import time
 import os
 import threading
 import subprocess
+import queue
 
-# 変更: 変換座標のログ出力設定とロック
-OUTPUT_COORDS_FILE = None
-_COORDS_LOG_LOCK = threading.Lock()
+# --- 追加: 変換座標保存設定とロック ---
+OUTPUT_COORDS_FILE = None        # 保存先ファイルパスまたは None
+OUTPUT_COORDS_EXECUTE = True     # True: 保存しつつデバイスも動かす / False: 保存のみ（デバイスは動かさない）
+_OUTPUT_COORDS_LOCK = threading.Lock()
 
 def select_coords_logging():
-    """変換した座標をファイルに保存するかを選択し、ファイル名を返す。Noneなら無効化。"""
+    """変換した座標をファイルに保存するか選択し、グローバルを設定する。"""
+    global OUTPUT_COORDS_FILE, OUTPUT_COORDS_EXECUTE
     while True:
-        choice = input("変換座標をファイルに保存しますか？ (y/N): ").strip().lower()
+        choice = input("変換座標をテキストに保存しますか？ (y/N): ").strip().lower()
         if choice in ('y', 'yes'):
             fname = input("保存するファイル名を入力（空欄で 'converted_coords.txt'）: ").strip()
             if not fname:
-                fname = 'converted_coords.txt'
+                fname = "converted_coords.txt"
             try:
-                # ファイルが存在しなければ作成（追記モードで閉じる）
-                open(fname, 'a', encoding='utf-8').close()
-                print(f"変換座標を '{fname}' に保存します（追記モード）。")
-                return fname
+                # ファイルを作成して書き込み権限を確認（追記モード）
+                with open(fname, 'a', encoding='utf-8'):
+                    pass
+                OUTPUT_COORDS_FILE = fname
+                ex = input("保存時にプロッタとスピーカを実際に動かしますか？ (y/N) : ").strip().lower()
+                OUTPUT_COORDS_EXECUTE = True if ex in ('y', 'yes') else False
+                print(f"座標保存: {OUTPUT_COORDS_FILE} 実行フラグ: {OUTPUT_COORDS_EXECUTE}")
+                return
             except Exception as e:
                 print(f"ファイル作成エラー: {e}")
-                return None
+                return
         elif choice in ('n', 'no', ''):
-            return None
+            OUTPUT_COORDS_FILE = None
+            OUTPUT_COORDS_EXECUTE = True
+            return
         else:
             print("y または n を入力してください。")
 
-def _save_converted_coords(original_cmd_parts, data, filename):
+def _save_converted_coords(original_cmd_parts, data):
     """センター座標と delay をテキストファイルに追記する。thread-safe。"""
-    if not filename or not data:
+    global OUTPUT_COORDS_FILE
+    if not OUTPUT_COORDS_FILE or not data:
         return
     try:
         center_x, center_y, delay = data
-        # 整形して保存: X Y F CMD...
         cmd_str = ' '.join(original_cmd_parts)
         line = f"{center_x:.3f} {center_y:.3f} {int(delay)} {cmd_str}\n"
-        with _COORDS_LOG_LOCK:
-            with open(filename, 'a', encoding='utf-8') as fw:
+        with _OUTPUT_COORDS_LOCK:
+            with open(OUTPUT_COORDS_FILE, 'a', encoding='utf-8') as fw:
                 fw.write(line)
     except Exception as e:
         print(f"座標保存エラー: {e}")
@@ -49,40 +58,22 @@ def main():
     print("習字学習システム\n")
     mode = select_mode()
     ser1 = select_port("スピーカアレイのシリアルポート選択")
+    if ser1 is None:
+        print("スピーカポートが開けませんでした。終了します。")
+        return
     sp = Speaker(ser1)
     ser2 = select_port("プロッタのシリアルポート選択")
+    if ser2 is None:
+        print("プロッタポートが開けませんでした。終了します。")
+        try:
+            sp.stop()
+        except Exception:
+            pass
+        return
     pl = Plotter(ser2)
 
-    while True:
-        file = select_file()
-        if not file:
-            print("ファイルが選択されませんでした。終了します。")
-            break
-        try:
-            with open(file, 'r') as f:
-                print(f"'{file}'の内容で動作を開始します．．．")
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    tmp = line.split()
-                    print(f"命令: {tmp}")
-                    handle_command(tmp, pl, sp)
-        except Exception as e:
-            print(f"エラーが発生しました: {e}")
-        except KeyboardInterrupt:
-            print("処理を中断しました。")
-            break
-        time.sleep(0.5)
-        pl.reset()
-        if not yes_no_input("つづけますか？"):
-            break
-        sp.a0_count=0  # A0カウントをリセット
-    ser1.close()
-    ser2.close()
-    # 変更: 起動時に座標ログの有効化を確認
-    global OUTPUT_COORDS_FILE
-    OUTPUT_COORDS_FILE = select_coords_logging()
+    # 追加: 起動時に座標保存設定を確認
+    select_coords_logging()
 
     if mode == "reverse":
         # 座標ファイルを読み込んで逆変換モードで実行
@@ -223,31 +214,38 @@ def coordinates_to_num(pl, center_x, center_y):
 
 def handle_command(tmp, pl, sp):
     cmd = tmp[0]
+    # 変更点: OUTPUT_COORDS_FILE が有効で OUTPUT_COORDS_EXECUTE が False のときは
+    # 「保存のみ」モードとしてデバイス実行をスキップする。
     if cmd == "C":
-        print("config命令\n")
-        # ここに設定処理を追加可能
+        print("config命令（キューに積む）\n")
+        sp.enqueue(' '.join(tmp))
     elif cmd in ("A1", "A2"):
         print("ホワイトノイズorバンドパスok")
+        data = pl.mapping(tmp)
+        print(f"変換後:{data}")
+        # 変換結果をファイルに保存（有効な場合）
+        _save_converted_coords(tmp, data)
+        # 保存のみモードならデバイスは動かさない
+        if OUTPUT_COORDS_FILE and not OUTPUT_COORDS_EXECUTE:
+            print("保存のみモード: プロッタ・スピーカの実行をスキップします。")
+            return
+        # 通常処理
         pl.down()  # ペンを下げる
-        data = pl.mapping(tmp)
-        print(f"変換後:{data}")
-        # 並列実行
-        # 追加: 変換結果をファイルに保存（有効な場合）
-        _save_converted_coords(tmp, data, OUTPUT_COORDS_FILE)
-        # plotterは優先で直接スレッドに投げる。スピーカはキューへ
         t_plotter = threading.Thread(target=pl.write, args=(*data,), kwargs={'branch': 0})
-        t_speaker = threading.Thread(target=sp.write, args=(' '.join(tmp),))
         t_plotter.start()
-        t_speaker.start()
+        sp.enqueue(' '.join(tmp))
         t_plotter.join()
-        t_speaker.join()
     elif cmd == "A0":
-        pl.up()    # ペンを上げる
         data = pl.mapping(tmp)
         print(f"変換後:{data}")
-        # 追加: 変換結果をファイルに保存（有効な場合）
-        _save_converted_coords(tmp, data, OUTPUT_COORDS_FILE)
-        # A0カウントに応じた音声を再生（非同期）
+        # 変換結果をファイルに保存（有効な場合）
+        _save_converted_coords(tmp, data)
+        # 保存のみモードならデバイスは動かさない
+        if OUTPUT_COORDS_FILE and not OUTPUT_COORDS_EXECUTE:
+            print("保存のみモード: A0 の実行をスキップします。")
+            return
+        # 通常処理
+        pl.up()    # ペンを上げる
         try:
             sp.play_a0_sound()
         except Exception as e:
@@ -255,15 +253,17 @@ def handle_command(tmp, pl, sp):
         pl.write(*data, branch=1)
         time.sleep(0.5)
     elif cmd in ("B1", "B2"):
-        print("複数命令スピーカ処理\n")
-        # 実装例: sp.write(' '.join(tmp))
+        print("複数命令スピーカ処理（キューへ）\n")
+        sp.enqueue(' '.join(tmp))
     elif cmd == "D1":
         delay = (int(tmp[1]) / 1000) + 0.1
         print(f"delay処理:{delay}ms\n")
         time.sleep(delay)
     else:
         print("形式が不正\n")
-    pl.sync()
+    # sync はデバイス実行した場合のみ呼ぶ（保存のみなら skip）
+    if not (OUTPUT_COORDS_FILE and not OUTPUT_COORDS_EXECUTE):
+        pl.sync()
 
 def select_port(title):
     print(f"{title}\n")
@@ -320,11 +320,15 @@ def select_file():
 
 def yes_no_input(msg="Please respond with 'yes' or 'no' [y/N]: "):
     while True:
-        choice = input(f"{msg} ").lower()
+        choice = input(f"{msg} ").lower().strip()
+        if choice == "":
+            return False
         if choice in ['y', 'ye', 'yes']:
             return True
         elif choice in ['n', 'no']:
             return False
+        else:
+            print("y または n を入力してください。")
 
 class Speaker:
     def __init__(self, ser, sounds_dirs=None):
@@ -334,12 +338,65 @@ class Speaker:
         # A0 の呼び出し回数カウンタ（初回A0で1になる）
         self.a0_count = 0
 
+        # キューとワーカー（Cコマンド等の間引き・バッチ送信用）
+        self._q = queue.Queue()
+        self._stop_event = threading.Event()
+        self._worker = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker.start()
+
     def write(self, line):
-        line = str(line) + '\n'
-        self.ser.write(line.encode('utf-8'))
-        print(f"送信: {line.strip()}")
-        time.sleep(0.1)
-        print("送信が完了しました。")
+        line = str(line).strip() + '\n'
+        try:
+            if self.ser:
+                self.ser.write(line.encode('utf-8'))
+            print(f"送信: {line.strip()}")
+            # 軽いウェイトで連続送信の負荷を低減
+            time.sleep(0.01)
+        except Exception as e:
+            print(f"Speaker write error: {e}")
+
+    def enqueue(self, line):
+        # 非同期で送る（バーストはワーカーで間引かれる）
+        try:
+            self._q.put(line)
+        except Exception as e:
+            print(f"enqueue error: {e}")
+
+    def _worker_loop(self):
+        # バースト時は最後のコマンドだけを送る（短時間の連続Cを間引く）
+        BATCH_INTERVAL = 0.05  # 50ms
+        while not self._stop_event.is_set():
+            try:
+                item = self._q.get(timeout=BATCH_INTERVAL)
+                latest = item
+                # すぐに溜まった分を取り出して最後のものだけにする
+                while True:
+                    try:
+                        nxt = self._q.get_nowait()
+                        latest = nxt
+                    except queue.Empty:
+                        break
+                self._send_raw(latest)
+            except queue.Empty:
+                continue
+        # 終了時に残りをフラッシュ
+        while True:
+            try:
+                item = self._q.get_nowait()
+                self._send_raw(item)
+            except queue.Empty:
+                break
+
+    def _send_raw(self, line):
+        try:
+            # write は改行を追加するのでそのまま渡す
+            self.write(line)
+        except Exception as e:
+            print(f"Speaker send error: {e}")
+
+    def stop(self):
+        self._stop_event.set()
+        self._worker.join(timeout=1)
 
     def _find_file_for_index(self, index):
         base = f"{index:03d}"
@@ -397,23 +454,50 @@ class Plotter:
         delay = delay * 60
         return (center_x, center_y, delay)
     def write(self, center_x, center_y, delay, branch=0):
-        if branch:
-            line = f'G0 X{center_x} Y{center_y}'
-        else:
-            line = f'G1 X{center_x} Y{center_y} F{delay}'
-        line = str(line) + '\n'
-        self.ser.write(line.encode('utf-8'))
-        print(f"送信: {line.strip()}")
+        if not self.ser:
+            print("Plotter: シリアルが開いていません (write をスキップ)。")
+            return
+        try:
+            if branch:
+                line = f'G0 X{center_x} Y{center_y}'
+            else:
+                line = f'G1 X{center_x} Y{center_y} F{delay}'
+            line = str(line) + '\n'
+            self.ser.write(line.encode('utf-8'))
+            print(f"送信: {line.strip()}")
+        except Exception as e:
+            print(f"Plotter write error: {e}")
     def reset(self):
-        line = "G0 X0 Y0 Z0\n"
-        self.ser.write(line.encode('utf-8'))
+        if not self.ser:
+            print("Plotter: シリアルが開いていません (reset をスキップ)。")
+            return
+        try:
+            line = "G0 X0 Y0 Z0\n"
+            self.ser.write(line.encode('utf-8'))
+        except Exception as e:
+            print(f"Plotter reset error: {e}")
     def down(self):
-        line = "G0 Z10\n"
-        self.ser.write(line.encode('utf-8'))
+        if not self.ser:
+            print("Plotter: シリアルが開いていません (down をスキップ)。")
+            return
+        try:
+            line = "G0 Z8\n"
+            self.ser.write(line.encode('utf-8'))
+        except Exception as e:
+            print(f"Plotter down error: {e}")
     def up(self):
-        line = "G0 Z0\n"
-        self.ser.write(line.encode('utf-8'))
+        if not self.ser:
+            print("Plotter: シリアルが開いていません (up をスキップ)。")
+            return
+        try:
+            line = "G0 Z0\n"
+            self.ser.write(line.encode('utf-8'))
+        except Exception as e:
+            print(f"Plotter up error: {e}")
     def sync(self):
+        if not self.ser:
+            print("Plotter: シリアルが開いていません (sync をスキップ)。")
+            return
         print("sync start\n")
         while True:
             try:
@@ -432,3 +516,7 @@ class Plotter:
                 print("処理を中断しました。")
                 break
         print("sync end\n")
+
+# ファイルをスクリプトとして直接実行できるようにする
+if __name__ == "__main__":
+    main()
