@@ -6,6 +6,46 @@ import threading
 import subprocess
 import queue
 
+# 変更: 変換座標のログ出力設定とロック
+OUTPUT_COORDS_FILE = None
+_COORDS_LOG_LOCK = threading.Lock()
+
+def select_coords_logging():
+    """変換した座標をファイルに保存するかを選択し、ファイル名を返す。Noneなら無効化。"""
+    while True:
+        choice = input("変換座標をファイルに保存しますか？ (y/N): ").strip().lower()
+        if choice in ('y', 'yes'):
+            fname = input("保存するファイル名を入力（空欄で 'converted_coords.txt'）: ").strip()
+            if not fname:
+                fname = 'converted_coords.txt'
+            try:
+                # ファイルが存在しなければ作成（追記モードで閉じる）
+                open(fname, 'a', encoding='utf-8').close()
+                print(f"変換座標を '{fname}' に保存します（追記モード）。")
+                return fname
+            except Exception as e:
+                print(f"ファイル作成エラー: {e}")
+                return None
+        elif choice in ('n', 'no', ''):
+            return None
+        else:
+            print("y または n を入力してください。")
+
+def _save_converted_coords(original_cmd_parts, data, filename):
+    """センター座標と delay をテキストファイルに追記する。thread-safe。"""
+    if not filename or not data:
+        return
+    try:
+        center_x, center_y, delay = data
+        # 整形して保存: X Y F CMD...
+        cmd_str = ' '.join(original_cmd_parts)
+        line = f"{center_x:.3f} {center_y:.3f} {int(delay)} {cmd_str}\n"
+        with _COORDS_LOG_LOCK:
+            with open(filename, 'a', encoding='utf-8') as fw:
+                fw.write(line)
+    except Exception as e:
+        print(f"座標保存エラー: {e}")
+
 def main():
     print("習字学習システム\n")
     mode = select_mode()
@@ -13,6 +53,10 @@ def main():
     sp = Speaker(ser1)
     ser2 = select_port("プロッタのシリアルポート選択")
     pl = Plotter(ser2)
+
+    # 変更: 起動時に座標ログの有効化を確認
+    global OUTPUT_COORDS_FILE
+    OUTPUT_COORDS_FILE = select_coords_logging()
 
     if mode == "reverse":
         # 座標ファイルを読み込んで逆変換モードで実行
@@ -162,6 +206,8 @@ def handle_command(tmp, pl, sp):
         pl.down()  # ペンを下げる
         data = pl.mapping(tmp)
         print(f"変換後:{data}")
+        # 追加: 変換結果をファイルに保存（有効な場合）
+        _save_converted_coords(tmp, data, OUTPUT_COORDS_FILE)
         # plotterは優先で直接スレッドに投げる。スピーカはキューへ
         t_plotter = threading.Thread(target=pl.write, args=(*data,), kwargs={'branch': 0})
         t_plotter.start()
@@ -171,6 +217,8 @@ def handle_command(tmp, pl, sp):
         pl.up()    # ペンを上げる
         data = pl.mapping(tmp)
         print(f"変換後:{data}")
+        # 追加: 変換結果をファイルに保存（有効な場合）
+        _save_converted_coords(tmp, data, OUTPUT_COORDS_FILE)
         # A0カウントに応じた音声を再生（非同期）
         try:
             sp.play_a0_sound()
@@ -409,6 +457,3 @@ class Plotter:
                 print("処理を中断しました。")
                 break
         print("sync end\n")
-
-if __name__ == "__main__":
-    main()
