@@ -5,13 +5,55 @@ import os
 import threading
 import subprocess
 
+# 変更: 変換座標のログ出力設定とロック
+OUTPUT_COORDS_FILE = None
+_COORDS_LOG_LOCK = threading.Lock()
+
+def select_coords_logging():
+    """変換した座標をファイルに保存するかを選択し、ファイル名を返す。Noneなら無効化。"""
+    while True:
+        choice = input("変換座標をファイルに保存しますか？ (y/N): ").strip().lower()
+        if choice in ('y', 'yes'):
+            fname = input("保存するファイル名を入力（空欄で 'converted_coords.txt'）: ").strip()
+            if not fname:
+                fname = 'converted_coords.txt'
+            try:
+                # ファイルが存在しなければ作成（追記モードで閉じる）
+                open(fname, 'a', encoding='utf-8').close()
+                print(f"変換座標を '{fname}' に保存します（追記モード）。")
+                return fname
+            except Exception as e:
+                print(f"ファイル作成エラー: {e}")
+                return None
+        elif choice in ('n', 'no', ''):
+            return None
+        else:
+            print("y または n を入力してください。")
+
+def _save_converted_coords(original_cmd_parts, data, filename):
+    """センター座標と delay をテキストファイルに追記する。thread-safe。"""
+    if not filename or not data:
+        return
+    try:
+        center_x, center_y, delay = data
+        # 整形して保存: X Y F CMD...
+        cmd_str = ' '.join(original_cmd_parts)
+        line = f"{center_x:.3f} {center_y:.3f} {int(delay)} {cmd_str}\n"
+        with _COORDS_LOG_LOCK:
+            with open(filename, 'a', encoding='utf-8') as fw:
+                fw.write(line)
+    except Exception as e:
+        print(f"座標保存エラー: {e}")
+
 def main():
     print("習字学習システム\n")
+    mode = select_mode()
     ser1 = select_port("スピーカアレイのシリアルポート選択")
     sp = Speaker(ser1)
     ser2 = select_port("プロッタのシリアルポート選択")
     pl = Plotter(ser2)
 
+<<<<<<< HEAD
     while True:
         file = select_file()
         if not file:
@@ -39,6 +81,148 @@ def main():
         sp.a0_count=0  # A0カウントをリセット
     ser1.close()
     ser2.close()
+=======
+    # 変更: 起動時に座標ログの有効化を確認
+    global OUTPUT_COORDS_FILE
+    OUTPUT_COORDS_FILE = select_coords_logging()
+
+    if mode == "reverse":
+        # 座標ファイルを読み込んで逆変換モードで実行
+        reverse_mode_file(pl, sp)
+    else:
+        # 通常モード（既存の処理）
+        while True:
+            file = select_file()
+            if not file:
+                print("ファイルが選択されませんでした。終了します。")
+                break
+            try:
+                with open(file, 'r') as f:
+                    print(f"'{file}'の内容で動作を開始します．．．")
+
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        tmp = line.split()
+                        print(f"命令: {tmp}")
+                        handle_command(tmp, pl, sp)
+            except Exception as e:
+                print(f"エラーが発生しました: {e}")
+            except KeyboardInterrupt:
+                print("処理を中断しました。")
+                break
+            time.sleep(0.5)
+            pl.reset()
+            # 続けますかで 'y' を押したときに A0 カウントをリセット
+            cont = yes_no_input("つづけますか？")
+            if cont:
+                sp.a0_count = 0
+            else:
+                break
+    # ワーカー停止してからシリアルを閉じる
+    try:
+        sp.stop()
+    except Exception:
+        pass
+    if ser1:
+        try:
+            ser1.close()
+        except Exception:
+            pass
+    if ser2:
+        try:
+            ser2.close()
+        except Exception:
+            pass
+>>>>>>> c57c32859c5e00aff051965244e16edd6e74c5e7
+
+def select_mode():
+    print("モードを選択してください:")
+    print("  1: 通常（命令ファイル→座標変換）")
+    print("  2: 逆変換（座標ファイル→スピーカ命令生成 + プロッタ移動）")
+    while True:
+        choice = input("番号を入力してください: ").strip()
+        if choice == "1":
+            return "normal"
+        elif choice == "2":
+            return "reverse"
+        else:
+            print("無効な番号です。1か2を入力してください。")
+
+def reverse_mode_file(pl, sp):
+    """
+    ファイルに書かれた座標行を読み込み、対応するスピーカ命令（例: A1 num delay）を生成して送る。
+    ファイルの各行フォーマット:
+      X Y F [CMD]
+    例:
+      10.0 -5.0 200 A1
+      -5.0 20.0 150
+    CMD を省略した場合は A1 を使う。
+    """
+    file = select_file()
+    if not file:
+        print("ファイルが選択されませんでした。終了します。")
+        return
+    try:
+        with open(file, 'r') as f:
+            print(f"'{file}' の座標リストを逆変換で処理します．．．")
+            for lineno, raw in enumerate(f, start=1):
+                line = raw.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split()
+                if len(parts) < 3:
+                    print(f"[{lineno}] フォーマットエラー（X Y F が必要）: {line}")
+                    continue
+                try:
+                    x = float(parts[0])
+                    y = float(parts[1])
+                    fval = int(float(parts[2]))
+                    cmd_type = parts[3] if len(parts) >= 4 else "A1"
+                except Exception as e:
+                    print(f"[{lineno}] 数値変換エラー: {e} -- {line}")
+                    continue
+                num = coordinates_to_num(pl, x, y)
+                if num is None:
+                    print(f"[{lineno}] 座標が範囲外です: X={x}, Y={y}")
+                    continue
+                tmp = [cmd_type, str(num), str(fval)]
+                print(f"[{lineno}] 生成命令: {tmp}")
+                # 既存の handle_command を使って送信・描画・同期を行う
+                try:
+                    handle_command(tmp, pl, sp)
+                except KeyboardInterrupt:
+                    print("処理が中断されました。")
+                    break
+                except Exception as e:
+                    print(f"[{lineno}] 実行エラー: {e}")
+    except Exception as e:
+        print(f"ファイル読み込みエラー: {e}")
+
+def coordinates_to_num(pl, center_x, center_y):
+    """
+    Plotter.mapping() の逆変換を行う（pl の設定に合わせて）。
+    return: num (1..grid_count*grid_count) or None
+    """
+    try:
+        grid_count = 8
+        area_size = 200
+        cell_size = area_size / grid_count
+        # mapping() で center_x = ((x_min + x_max)/2) - 210
+        # and center_y = -((y_min + y_max)/2)
+        x_adj = center_x + 210
+        y_adj = -center_y
+        if x_adj < 0 or y_adj < 0:
+            return None
+        col_index = int(x_adj // cell_size)
+        row_index = int(y_adj // cell_size)
+        if 0 <= col_index < grid_count and 0 <= row_index < grid_count:
+            num = row_index * grid_count + col_index + 1
+            return num
+        return None
+    except Exception:
+        return None
 
 def handle_command(tmp, pl, sp):
     cmd = tmp[0]
@@ -50,7 +234,13 @@ def handle_command(tmp, pl, sp):
         pl.down()  # ペンを下げる
         data = pl.mapping(tmp)
         print(f"変換後:{data}")
+<<<<<<< HEAD
         # 並列実行
+=======
+        # 追加: 変換結果をファイルに保存（有効な場合）
+        _save_converted_coords(tmp, data, OUTPUT_COORDS_FILE)
+        # plotterは優先で直接スレッドに投げる。スピーカはキューへ
+>>>>>>> c57c32859c5e00aff051965244e16edd6e74c5e7
         t_plotter = threading.Thread(target=pl.write, args=(*data,), kwargs={'branch': 0})
         t_speaker = threading.Thread(target=sp.write, args=(' '.join(tmp),))
         t_plotter.start()
@@ -61,6 +251,8 @@ def handle_command(tmp, pl, sp):
         pl.up()    # ペンを上げる
         data = pl.mapping(tmp)
         print(f"変換後:{data}")
+        # 追加: 変換結果をファイルに保存（有効な場合）
+        _save_converted_coords(tmp, data, OUTPUT_COORDS_FILE)
         # A0カウントに応じた音声を再生（非同期）
         try:
             sp.play_a0_sound()
@@ -246,6 +438,3 @@ class Plotter:
                 print("処理を中断しました。")
                 break
         print("sync end\n")
-
-if __name__ == "__main__":
-    main()
