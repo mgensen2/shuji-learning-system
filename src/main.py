@@ -18,7 +18,8 @@ def main():
             pl = Plotter(ser2)
             pl.reset()
             point = 0
-        print("読み込みファイルを選択\n")
+        print("動作モードを選択\n")
+        print("1:スピーカアレイ\n2:リアルタイムモード(未実装)\n")
         file = select_file()
         try:
             with open(file, 'r') as f:
@@ -28,9 +29,7 @@ def main():
                     tmp=line.split(' ')#半角スペースで区切り
                     print(tmp)
                     #命令分岐
-                    if tmp[0] == "C" :
-                        print("config命令\n")
-                    elif tmp[0] == "A1" or  tmp[0] == "A2": 
+                    if tmp[0] == "A1" or  tmp[0] == "A2": 
                         print("ホワイトノイズorバンドパスok")
                         data = pl.mapping(tmp)
                         print(f"変換後:{data}")
