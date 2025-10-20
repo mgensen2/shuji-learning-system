@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>運筆データ取得</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            touch-action: none; /* iPadでのピンチズームなどを無効化 */
+            overflow: hidden; /* スクロールバーを非表示 */
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+        }
+        #controls {
+            padding: 10px;
+            background-color: #fff;
+            border-bottom: 1px solid #ccc;
+        }
+        button {
+            font-size: 16px;
+            padding: 8px 12px;
+            margin-right: 10px;
+        }
+        #drawCanvas {
+            background-color: #ffffff;
+            cursor: crosshair;
+            /* 画面サイズに応じて調整（ここでは例として固定） */
+            /* width: 100vw; height: 80vh; なども可能です */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <button id="downloadBtn">CSVダウンロード</button>
+        <button id="clearBtn">クリア</button>
+    </div>
+
+    <canvas id="drawCanvas"></canvas>
+
+    <script src="script.js"></script>
+
+</body>
+</html>
