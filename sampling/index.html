@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>運筆データ取得 (8x8グリッド)</title>
+    <title>運筆データ取得 (8x8グリッド + セル移動)</title>
     <style>
         body {
             font-family: sans-serif;
-            touch-action: none; /* iPadでのピンチズームなどを無効化 */
-            overflow: hidden; /* スクロールバーを非表示 */
+            touch-action: none;
+            overflow: hidden;
             margin: 0;
             padding: 0;
             background-color: #f0f0f0;
@@ -17,24 +17,29 @@
             padding: 10px;
             background-color: #fff;
             border-bottom: 1px solid #ccc;
+            display: flex; /* ボタンを横並びにする */
+            flex-wrap: wrap; /* 折り返し */
         }
         button {
             font-size: 16px;
             padding: 8px 12px;
-            margin-right: 10px;
+            margin: 4px;
+        }
+        #clearBtn {
+            background-color: #f8d7da; /* 少し目立たせる */
         }
         #drawCanvas {
             background-color: #ffffff;
             cursor: crosshair;
-            /* サイズはJSで設定。ここでは枠線のみ定義 */
-            border: 1px solid #333; 
+            border: 1px solid #333;
         }
     </style>
 </head>
 <body>
 
     <div id="controls">
-        <button id="downloadBtn">CSVダウンロード</button>
+        <button id="downloadFullDataBtn">全データ (CSV)</button>
+        <button id="downloadTransitionBtn">セル移動のみ (CSV)</button>
         <button id="clearBtn">クリア</button>
     </div>
 
