@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>運筆データ取得</title>
+    <title>運筆データ取得 (8x8グリッド)</title>
     <style>
         body {
             font-family: sans-serif;
@@ -26,8 +26,8 @@
         #drawCanvas {
             background-color: #ffffff;
             cursor: crosshair;
-            /* 画面サイズに応じて調整（ここでは例として固定） */
-            /* width: 100vw; height: 80vh; なども可能です */
+            /* サイズはJSで設定。ここでは枠線のみ定義 */
+            border: 1px solid #333; 
         }
     </style>
 </head>

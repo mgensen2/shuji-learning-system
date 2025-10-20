@@ -4,11 +4,48 @@ window.addEventListener('load', () => {
     const downloadBtn = document.getElementById('downloadBtn');
     const clearBtn = document.getElementById('clearBtn');
 
-    // Canvasのサイズをウィンドウ全体（コントロールバーを除く）に合わせる
-    const controlsHeight = document.getElementById('controls').offsetHeight;
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight - controlsHeight;
+    // --- グリッド設定 ---
+    const GRID_SIZE = 8; // 8x8
+    let cellSize = 0;
+    // -------------------
 
+    // Canvasのサイズを「正方形」に設定
+    const controlsHeight = document.getElementById('controls').offsetHeight;
+    const availableHeight = window.innerHeight - controlsHeight;
+    // 利用可能な幅と高さのうち、小さい方に合わせて正方形を作成
+    const size = Math.min(window.innerWidth - 4, availableHeight - 4); // 枠線やマージンを考慮
+    
+    canvas.width = size;
+    canvas.height = size;
+    
+    // セルサイズを計算
+    cellSize = canvas.width / GRID_SIZE;
+
+    // グリッド線を描画する関数
+    function drawGrid() {
+        ctx.strokeStyle = '#e0e0e0'; // 薄いグレー
+        ctx.lineWidth = 0.5;
+        for (let i = 1; i < GRID_SIZE; i++) {
+            // 縦線
+            ctx.beginPath();
+            ctx.moveTo(i * cellSize, 0);
+            ctx.lineTo(i * cellSize, canvas.height);
+            ctx.stroke();
+            // 横線
+            ctx.beginPath();
+            ctx.moveTo(0, i * cellSize);
+            ctx.lineTo(canvas.width, i * cellSize);
+            ctx.stroke();
+        }
+        // 描画用の設定に戻す
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#000000';
+    }
+
+    // 初期グリッド描画
+    drawGrid();
+
+    // 描画用の設定
     ctx.lineWidth = 2; // 線の太さ
     ctx.strokeStyle = '#000000'; // 線の色
     ctx.lineCap = 'round'; // 線の端を丸く
@@ -19,19 +56,12 @@ window.addEventListener('load', () => {
     let drawingData = []; // 全ての座標データを格納する配列
 
     // ----------------------------------------
-    // イベントリスナーの登録
+    // イベントリスナー
     // ----------------------------------------
-
-    // ペンが触れた時 (書き始め)
     canvas.addEventListener('pointerdown', startDrawing);
-    // ペンが動いた時 (書いている最中)
     canvas.addEventListener('pointermove', draw);
-    // ペンが離れた時 (書き終わり)
     canvas.addEventListener('pointerup', stopDrawing);
-    // ペンがCanvas領域から外れた時
     canvas.addEventListener('pointerleave', stopDrawing);
-
-    // ボタンの処理
     downloadBtn.addEventListener('click', downloadCSV);
     clearBtn.addEventListener('click', clearCanvas);
 
@@ -40,31 +70,21 @@ window.addEventListener('load', () => {
     // ----------------------------------------
 
     function startDrawing(e) {
-        // Apple Pencilからの入力のみを許可 (touchやmouseを除外)
         if (e.pointerType !== 'pen') return;
-
         isDrawing = true;
-        strokeCount++; // 新しいストローク
+        strokeCount++;
         
-        // 描画の開始位置をセット
         const pos = getCanvasPosition(e);
         ctx.beginPath();
         ctx.moveTo(pos.x, pos.y);
-
-        // データを記録
         recordData(e, 'down');
     }
 
     function draw(e) {
         if (!isDrawing || e.pointerType !== 'pen') return;
-
         const pos = getCanvasPosition(e);
-
-        // Canvasに線を描画
         ctx.lineTo(pos.x, pos.y);
         ctx.stroke();
-
-        // データを記録
         recordData(e, 'move');
     }
 
@@ -73,7 +93,6 @@ window.addEventListener('load', () => {
         isDrawing = false;
     }
 
-    // Canvas上の相対座標を取得
     function getCanvasPosition(e) {
         const rect = canvas.getBoundingClientRect();
         return {
@@ -82,19 +101,36 @@ window.addEventListener('load', () => {
         };
     }
 
-    // データを配列に格納
+    // データを配列に格納 (★修正点)
     function recordData(e, eventType) {
         const pos = getCanvasPosition(e);
+
+        // 座標からセルIDを計算
+        const cellX = Math.floor(pos.x / cellSize);
+        const cellY = Math.floor(pos.y / cellSize);
         
+        // 範囲外（0未満や8以上）にならないように補正
+        const validCellX = Math.max(0, Math.min(cellX, GRID_SIZE - 1));
+        const validCellY = Math.max(0, Math.min(cellY, GRID_SIZE - 1));
+        
+        // セルID (0〜63)
+        // (例: 0行目の0列目 = 0, 1行目の0列目 = 8)
+        const cellId = (validCellY * GRID_SIZE) + validCellX;
+
         drawingData.push({
-            timestamp: e.timeStamp, // ページ読み込みからの経過ミリ秒
-            event_type: eventType,  // 'down' または 'move'
-            stroke_id: strokeCount, // 何番目のストロークか
+            timestamp: e.timeStamp,
+            event_type: eventType,
+            stroke_id: strokeCount,
             x: pos.x,
             y: pos.y,
-            pressure: e.pressure, // 筆圧 (0.0 - 1.0)
-            tilt_x: e.tiltX,     // X軸の傾き
-            tilt_y: e.tiltY      // Y軸の傾き
+            pressure: e.pressure,
+            tilt_x: e.tiltX,
+            tilt_y: e.tiltY,
+            // --- ★追加データ ---
+            cell_x: validCellX, // どの列か (0-7)
+            cell_y: validCellY, // どの行か (0-7)
+            cell_id: cellId     // どのセルか (0-63)
+            // -------------------
         });
     }
 
@@ -108,34 +144,36 @@ window.addEventListener('load', () => {
             return;
         }
 
-        // CSVのヘッダー行
-        const headers = "timestamp,event_type,stroke_id,x,y,pressure,tilt_x,tilt_y";
+        // CSVのヘッダー行 (★修正点)
+        const headers = "timestamp,event_type,stroke_id,x,y,pressure,tilt_x,tilt_y,cell_x,cell_y,cell_id";
         
-        // CSVのデータ行を作成
+        // CSVのデータ行を作成 (★修正点)
         const csvRows = drawingData.map(d => {
             return [
                 d.timestamp,
                 d.event_type,
                 d.stroke_id,
-                d.x.toFixed(2), // 小数点以下2桁に丸める
+                d.x.toFixed(2),
                 d.y.toFixed(2),
                 d.pressure.toFixed(4),
                 d.tilt_x,
-                d.tilt_y
+                d.tilt_y,
+                // --- ★追加データ ---
+                d.cell_x,
+                d.cell_y,
+                d.cell_id
+                // -------------------
             ].join(',');
         });
 
-        // ヘッダーとデータ行を結合
         const csvContent = headers + "\n" + csvRows.join("\n");
-
-        // UTF-8 BOM を追加（Excelでの文字化け対策）
         const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
         const blob = new Blob([bom, csvContent], { type: 'text/csv;charset=utf-8;' });
         
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'unpitsu_data.csv'; // ダウンロードファイル名
+        a.download = 'unpitsu_data_grid.csv'; // (ファイル名変更)
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -146,7 +184,10 @@ window.addEventListener('load', () => {
         if (confirm("データを消去しますか？")) {
             drawingData = [];
             strokeCount = 0;
+            // Canvasをクリア
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // グリッド線を再描画
+            drawGrid();
         }
     }
 });
