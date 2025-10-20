@@ -10,7 +10,8 @@ window.addEventListener('load', () => {
     // --- 設定項目 ---
     const GRID_SIZE = 8;
     const COORD_LIMIT = 200;
-    const PRESSURE_MAX = 8; // ★筆圧の最大値を8に設定
+    const PRESSURE_MAX = 8;
+    const SAMPLING_INTERVAL = 50; // ★記録間隔 (ミリ秒)
 
     let cellSize = 0;
     
@@ -54,14 +55,15 @@ window.addEventListener('load', () => {
     let drawingData = []; 
     let cellTransitions = [];
     let lastCellId = -1;
+    let lastRecordTime = 0; // ★最後の記録時刻を保持
 
     // ----------------------------------------
     // イベントリスナー
     // ----------------------------------------
     canvas.addEventListener('pointerdown', startDrawing);
     canvas.addEventListener('pointermove', draw);
-    canvas.addEventListener('pointerup', stopDrawing);     // ★ 'up' を検出
-    canvas.addEventListener('pointerleave', stopDrawing);   // ★ 'leave' を検出
+    canvas.addEventListener('pointerup', stopDrawing);
+    canvas.addEventListener('pointerleave', stopDrawing);
     
     downloadFullDataBtn.addEventListener('click', () => downloadCSV(drawingData, 'unpitsu_data_full.csv'));
     downloadTransitionBtn.addEventListener('click', () => downloadCSV(cellTransitions, 'unpitsu_data_transitions.csv'));
@@ -111,6 +113,7 @@ window.addEventListener('load', () => {
         const cellId = getCellId(pos); 
 
         // --- セル移動の検出ロジック (変更なし) ---
+        // (注意: これは描画の頻度で検出される)
         if (cellId !== lastCellId) {
             const current_x = cellId % GRID_SIZE;
             const current_y = Math.floor(cellId / GRID_SIZE);
@@ -131,18 +134,18 @@ window.addEventListener('load', () => {
         }
         // ------------------------------
 
+        // ★描画は常に実行 (滑らかさを保つため)
         ctx.lineTo(pos.x, pos.y);
         ctx.stroke();
         
+        // ★記録は間引く
         recordData(e, 'move', pos, cellId); // eventType 'move'
     }
 
-    // --- ★修正点：ペンが離れた瞬間の記録 ---
     function stopDrawing(e) {
         if (e.pointerType !== 'pen') return;
-        if (!isDrawing) return; // 既に 'up' 処理済みの場合は何もしない
+        if (!isDrawing) return; 
 
-        // ペンが離れた最後の位置でデータを記録
         const pos = getCanvasPosition(e);
         const cellId = getCellId(pos);
         recordData(e, 'up', pos, cellId); // eventType 'up'
@@ -151,8 +154,21 @@ window.addEventListener('load', () => {
         lastCellId = -1; 
     }
 
-    // --- ★修正点：生データを記録する関数 (筆圧変換) ---
+    // --- ★修正点：生データを記録する関数 (間引き処理) ---
     function recordData(e, eventType, pos, cellId) {
+        
+        // --- ★間引き処理ロジック ---
+        if (eventType === 'move') {
+            // 'move' の場合、前回の記録から 50ms 経過しているかチェック
+            if (e.timeStamp - lastRecordTime < SAMPLING_INTERVAL) {
+                return; // 50ms経過していなければ、記録せずに終了
+            }
+        }
+        // 'down', 'up' の場合、または 'move' で 50ms 以上経過した場合は、
+        // 記録時刻を更新
+        lastRecordTime = e.timeStamp;
+        // ----------------------------
+
         const canvasSize = canvas.width; 
 
         // 座標変換 (右上が0, 左下-200)
@@ -161,22 +177,19 @@ window.addEventListener('load', () => {
         const convertedX = (normX - 1.0) * COORD_LIMIT;
         const convertedY = normY * -COORD_LIMIT;
 
-        // --- ★筆圧の計算ロジック ---
+        // 筆圧の計算ロジック
         let convertedPressure = 0;
         if (eventType === 'down' || eventType === 'move') {
-            // 'down' または 'move' の場合、e.pressure (0.0-1.0) をスケール変換
             convertedPressure = e.pressure * PRESSURE_MAX; // (0.0 〜 8.0)
         }
-        // eventType === 'up' の場合は、デフォルトの 0 が使用される
-        // ----------------------------
-
+        
         drawingData.push({
             timestamp: e.timeStamp,
-            event_type: eventType, // 'down', 'move', 'up' のいずれか
+            event_type: eventType,
             stroke_id: strokeCount,
             x: convertedX, 
             y: convertedY, 
-            pressure: convertedPressure, // ★変換後の筆圧
+            pressure: convertedPressure,
             tilt_x: e.tiltX,
             tilt_y: e.tiltY,
             cell_id: cellId
@@ -199,13 +212,11 @@ window.addEventListener('load', () => {
             return Object.keys(row).map(key => {
                 const value = row[key];
                 
-                // 数値の丸め処理 (変更なし)
                 if (typeof value === 'number') {
                     if (key === 'x' || key === 'y') {
                         return value.toFixed(2); 
                     }
                     if (key === 'pressure' || key === 'tilt_x' || key === 'tilt_y') {
-                        // pressure も 0.0000 〜 8.0000 で記録
                         return value.toFixed(4); 
                     }
                 }
@@ -233,6 +244,7 @@ window.addEventListener('load', () => {
             cellTransitions = [];
             strokeCount = 0;
             lastCellId = -1;
+            lastRecordTime = 0; // ★記録時刻をリセット
             
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             drawGrid(); 
