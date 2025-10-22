@@ -8,23 +8,6 @@ import sys
 import mediapipe as mp # ★ 変更点：MediaPipeをインポート
 
 # --- 1. 設定項目 ---
-<<<<<<< HEAD
-# ArUcoマーカーの設定
-ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
-
-# ★ 変更点：検出パラメータの調整
-DETECTOR_PARAMS = aruco.DetectorParameters()
-# 検出の精度を少し緩める (デフォルトは 0.03)
-# これにより、多少歪んだマーカーも認識しやすくなる可能性があります
-DETECTOR_PARAMS.polygonalApproxAccuracyRate = 0.09
-DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
-
-# マーカーIDの割り当て
-CORNER_IDS = [0, 1, 2, 3] # [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
-PEN_ID = 4
-
-# 範囲マーカーID -> 使用する角のインデックス (0:TL, 1:TR, 2:BR, 3:BL)
-=======
 # ArUcoマーカーの設定 (範囲検出用)
 ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
 DETECTOR_PARAMS = aruco.DetectorParameters()
@@ -35,7 +18,6 @@ DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
 CORNER_IDS = [0, 1, 2, 3] # [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
 
 # 範囲マーカーID -> 使用する角のインデックス
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
 CORNER_INDEX_MAP = {
     0: 2, # ID 0 (エリア左上) -> 右下の角
     1: 3, # ID 1 (エリア右上) -> 左下の角
@@ -43,8 +25,6 @@ CORNER_INDEX_MAP = {
     3: 1  # ID 3 (エリア左下) -> 右上の角
 }
 
-<<<<<<< HEAD
-=======
 # ★ 変更点：MediaPipe Hands の初期化
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
@@ -55,24 +35,14 @@ hands = mp_hands.Hands(
     min_tracking_confidence=0.5
 )
 
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
 # 座標系の設定
 COORD_LIMIT = 200.0
 PRESSURE_MAX = 8.0
 GRID_SIZE = 8
 SAMPLING_INTERVAL = 0.05
-<<<<<<< HEAD
-
-# 内部処理用の解像度
 WARPED_SIZE = 800
 CELL_SIZE_PX = WARPED_SIZE / GRID_SIZE
 
-
-=======
-WARPED_SIZE = 800
-CELL_SIZE_PX = WARPED_SIZE / GRID_SIZE
-
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
 # --- 2. データ格納リスト ---
 drawing_data = []     
 cell_transitions = [] 
@@ -82,18 +52,9 @@ is_recording = False
 stroke_count = 0
 last_cell_id = -1
 last_record_time = 0
-<<<<<<< HEAD
-last_pen_pos_norm = None
-
-# ★ 変更点：射影変換行列を保持する変数
-M_live = None   # リアルタイムで検出される行列
-M_locked = None # 記録開始時にロックされる行列
-
-=======
 last_pen_pos_norm = None # 最後に認識したペンの「正規化後」座標
 M_live = None   
 M_locked = None 
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
 
 # --- 4. ヘルパー関数 ---
 
@@ -144,19 +105,6 @@ def select_camera_index():
         print("カメラが選択されませんでした。")
     return selected_index
 
-<<<<<<< HEAD
-
-def get_marker_point(target_id, detected_ids, detected_corners):
-    """マーカーIDに応じた座標(ピクセル)を返す"""
-    if detected_ids is not None:
-        for i, marker_id in enumerate(detected_ids):
-            if marker_id == target_id:
-                corners = detected_corners[i][0]
-                if target_id == PEN_ID:
-                    center = np.mean(corners, axis=0)
-                    return center.astype(int)
-                elif target_id in CORNER_INDEX_MAP:
-=======
 # ★ 変更点：get_marker_point (PEN_IDのロジックを削除し、範囲マーカー専用に)
 def get_marker_point(target_id, detected_ids, detected_corners):
     """
@@ -168,7 +116,6 @@ def get_marker_point(target_id, detected_ids, detected_corners):
                 # 範囲マーカー(ID 0-3)かチェック
                 if target_id in CORNER_INDEX_MAP:
                     corners = detected_corners[i][0]
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
                     corner_index = CORNER_INDEX_MAP[target_id]
                     point = corners[corner_index]
                     return point.astype(int)
@@ -247,15 +194,8 @@ if not cap.isOpened():
     print(f"エラー: 選択されたカメラ {camera_index} を開けませんでした。")
     sys.exit()
 
-<<<<<<< HEAD
-# ★ 変更点：カメラの解像度を 1280x720 (HD) に設定しようと試みる
-# (カメラが対応していない場合は無視されます)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH,1920)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-=======
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
 print(f"カメラ解像度を {cap.get(cv2.CAP_PROP_FRAME_WIDTH)} x {cap.get(cv2.CAP_PROP_FRAME_HEIGHT)} で起動します。")
 
 # 出力先（真上から見た）座標の定義
@@ -271,17 +211,6 @@ while True:
     ret, frame = cap.read()
     if not ret:
         break
-<<<<<<< HEAD
-    
-    current_time = time.time()
-    (detected_corners, detected_ids, rejected) = DETECTOR.detectMarkers(frame)
-    
-    if detected_ids is not None:
-        aruco.drawDetectedMarkers(frame, detected_corners, detected_ids)
-
-    # --- ★ 変更点：範囲固定ロジック ---
-    # 1. 範囲マーカーの処理 (M_live の更新)
-=======
     
     current_time = time.time()
     
@@ -293,43 +222,16 @@ while True:
     if detected_ids is not None:
         aruco.drawDetectedMarkers(frame, detected_corners, detected_ids)
 
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
     src_pts = [get_marker_point(id, detected_ids, detected_corners) for id in CORNER_IDS]
     
     if all(pt is not None for pt in src_pts):
-        # 4隅がすべて見えている場合
         src_pts_np = np.float32(src_pts)
-<<<<<<< HEAD
-        M_live = cv2.getPerspectiveTransform(src_pts_np, dst_pts) # M_liveを更新
-        # ライブ範囲を緑色で描画
-=======
         M_live = cv2.getPerspectiveTransform(src_pts_np, dst_pts) 
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
         cv2.polylines(frame, [src_pts_np.astype(int)], True, (0, 255, 0), 2)
     
     # 2. どの変換行列(M)を使用するか決定
     M_to_use = None
     if is_recording and M_locked is not None:
-<<<<<<< HEAD
-        M_to_use = M_locked # 記録中はロックしたM
-        # (ロック中の範囲を参考用に青色で表示する場合)
-        # ※ M_locked から逆算する必要があり複雑なため、ここでは省略
-    elif M_live is not None:
-        M_to_use = M_live # 停止中は最新のM
-
-    # 3. 筆マーカーの処理 (M_to_use がある場合のみ)
-    if M_to_use is not None:
-        pen_center_pixel = get_marker_point(PEN_ID, detected_ids, detected_corners)
-        
-        if pen_center_pixel is not None:
-            # 筆マーカーの座標を射影変換
-            pen_pixel_np = np.float32([[pen_center_pixel]])
-            pen_pos_norm_raw = cv2.perspectiveTransform(pen_pixel_np, M_to_use)
-            pen_pos_norm = (pen_pos_norm_raw[0][0][0], pen_pos_norm_raw[0][0][1])
-            last_pen_pos_norm = pen_pos_norm # 最後の位置を保持
-            
-            # --- 記録中('move'イベント) ---
-=======
         M_to_use = M_locked 
     elif M_live is not None:
         M_to_use = M_live 
@@ -368,19 +270,13 @@ while True:
             last_pen_pos_norm = pen_pos_norm # 最後に検出した位置を保持
 
             # 記録中('move'イベント)
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
             if is_recording:
                 if current_time - last_record_time >= SAMPLING_INTERVAL:
                     record_data('move', current_time, stroke_count, pen_pos_norm)
-    # --- (変更点ここまで) ---
 
     # 4. 録画状態を画面に表示
     status_text = "RECORDING" if is_recording else "PAUSED"
     color = (0, 0, 255) if is_recording else (0, 165, 255)
-<<<<<<< HEAD
-    # 4隅が認識されていない(M_live=None)と記録開始できないことを示す
-=======
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
     if M_live is None and not is_recording:
         status_text = "AREA NOT FOUND"
         color = (100, 100, 100)
@@ -394,10 +290,6 @@ while True:
         break # ループを抜けて終了処理へ
 
     if key == ord('s'):
-<<<<<<< HEAD
-        # --- ★ 変更点：キー入力ロジック ---
-=======
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
         if not is_recording:
             # --- 記録開始 ---
             if M_live is not None:
@@ -406,19 +298,11 @@ while True:
                 stroke_count += 1
                 print(f"Recording START (Stroke {stroke_count}) - 範囲をロックしました")
                 
-<<<<<<< HEAD
-                # 'down' イベントを記録 (現在のペン位置で)
-                if last_pen_pos_norm:
-                    record_data('down', current_time, stroke_count, last_pen_pos_norm)
-                else:
-                    print("Warning: ペンが認識されていませんが、記録を開始します。")
-=======
                 # 'down' イベントを記録 (最後に認識したペン位置で)
                 if last_pen_pos_norm:
                     record_data('down', current_time, stroke_count, last_pen_pos_norm)
                 else:
                     print("Warning: ペン(手)が認識されていませんが、記録を開始します。")
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
             else:
                 print("Error: 4隅のマーカーが認識されていません。記録を開始できません。")
         
@@ -427,11 +311,7 @@ while True:
             is_recording = False
             M_locked = None # ★ M をアンロック
             print("Recording STOP - 範囲のロックを解除しました")
-<<<<<<< HEAD
-            if last_pen_pos_norm:
-=======
             if last_pen_pos_norm: # 最後に認識したペン位置があれば
->>>>>>> b968131afa4b65fb5e8b71e608b2065b421d49c2
                 record_data('up', current_time, stroke_count, last_pen_pos_norm)
 
     cv2.imshow("Camera View (Press 's' to Record, 'q' to Quit)", frame)
