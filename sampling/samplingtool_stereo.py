@@ -29,7 +29,7 @@ hands_side = mp_hands.Hands(
 
 # 座標系の設定
 COORD_LIMIT = 200.0
-PRESSURE_MAX = 8.0
+# PRESSURE_MAX = 8.0 # ★使わなくなるが、念のため残す
 GRID_SIZE = 8
 SAMPLING_INTERVAL = 0.05
 WARPED_SIZE = 800
@@ -41,7 +41,7 @@ cell_transitions = []
 
 # --- 3. 状態変数 ---
 is_recording_session = False # 's'キーでトグルするセッション全体の状態
-is_pen_down = False          # 筆が紙に触れているか (自動検出)
+is_pen_down = False         # 筆が紙に触れているか (自動検出)
 stroke_count = 0
 last_cell_id = -1
 last_record_time = 0
@@ -49,8 +49,9 @@ last_pen_pos_norm = None
 M_live = None   
 M_locked = None 
 
-# ★ 筆圧キャリブレーション用の変数
-Y_TOUCH_THRESHOLD = -1 # キャリブレーションで決定されるY座標
+# ★ 筆圧キャリブレーション用の変数 (変更)
+Y_TOUCH_THRESHOLD = -1     # キャリブレーションで決定されるY座標 (筆圧 0)
+Y_MAX_PRESS_THRESHOLD = -1 # キャリブレーションで決定されるY座標 (筆圧 8)
 
 
 # --- 4. ヘルパー関数 ---
@@ -96,11 +97,14 @@ def select_camera_index(prompt_text):
     cv2.destroyAllWindows()
     return selected_index
 
-def calibrate_side_camera(cap_side):
-    """Side-Viewカメラの筆圧(Z軸)キャリブレーションを行う"""
-    global Y_TOUCH_THRESHOLD
-    print("--- 筆圧 (Z軸) キャリブレーション ---")
-    print("筆（人差し指の先端）を紙に「触れさせた」状態で 'c' キーを押してください。")
+# ★★★★★ 関数名を変更し、内容を大幅に修正 ★★★★★
+def calibrate_pressure_range(cap_side):
+    """Side-Viewカメラの筆圧(Z軸)キャリブレーションを2段階で行う"""
+    global Y_TOUCH_THRESHOLD, Y_MAX_PRESS_THRESHOLD
+    
+    # --- (1/2) 筆圧 0 (タッチ) のキャリブレーション ---
+    print("--- 筆圧 (Z軸) キャリブレーション (1/2) ---")
+    print("筆（人差し指の先端）を紙に「軽く触れさせた」状態で 'c' キーを押してください。 (筆圧 0)")
     
     current_y = -1
     
@@ -133,7 +137,7 @@ def calibrate_side_camera(cap_side):
 
         # 画面に指示を表示
         cv2.rectangle(frame, (0, 0), (w, 40), (0,0,0), -1)
-        cv2.putText(frame, "Touch pen to paper, then press 'c' to calibrate", (10, 30), 
+        cv2.putText(frame, "Touch pen to paper (Pressure 0), then press 'c'", (10, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         
         cv2.imshow("Side Camera Calibration", frame)
@@ -143,9 +147,8 @@ def calibrate_side_camera(cap_side):
         if key == ord('c'):
             if current_y != -1:
                 Y_TOUCH_THRESHOLD = current_y
-                print(f"キャリブレーション完了。タッチしきい値(Y座標) = {Y_TOUCH_THRESHOLD}")
-                cv2.destroyAllWindows()
-                return True
+                print(f"キャリブレーション (1/2) 完了。タッチしきい値(Y座標) = {Y_TOUCH_THRESHOLD}")
+                break # ★次のステップへ
             else:
                 print("エラー: 手が検出されていません。 'c' を押す前に手を映してください。")
         
@@ -154,7 +157,62 @@ def calibrate_side_camera(cap_side):
             cv2.destroyAllWindows()
             return False
             
+    # --- (2/2) 筆圧 8 (最大) のキャリブレーション ---
+    print("\n--- 筆圧 (Z軸) キャリブレーション (2/2) ---")
+    print("筆（人差し指の先端）を紙に「強く押し付けた」状態で 'm' キーを押してください。 (筆圧 8)")
+    current_y = -1
+    
+    while True:
+        ret, frame = cap_side.read()
+        if not ret: return False
+        
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands_side.process(frame_rgb)
+        h, w, _ = frame.shape
+
+        if results.multi_hand_landmarks:
+            hand_landmarks = results.multi_hand_landmarks[0]
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            current_y = int(landmark.y * h)
+            current_x = int(landmark.x * w)
+            
+            cv2.putText(frame, f"Detected Y: {current_y}", (current_x + 10, current_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.circle(frame, (current_x, current_y), 5, (0, 0, 255), -1)
+
+        # 既存のしきい値(P=0)を表示
+        cv2.line(frame, (0, Y_TOUCH_THRESHOLD), (w, Y_TOUCH_THRESHOLD), (0, 255, 255), 2)
+        cv2.putText(frame, f"TOUCH_Y_LEVEL (Pressure 0): {Y_TOUCH_THRESHOLD}", (10, Y_TOUCH_THRESHOLD - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        cv2.rectangle(frame, (0, 0), (w, 40), (0,0,0), -1)
+        cv2.putText(frame, "Press firmly (Pressure 8), then press 'm'", (10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        cv2.imshow("Side Camera Calibration", frame)
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord('m'):
+            if current_y != -1:
+                if current_y > Y_TOUCH_THRESHOLD:
+                    Y_MAX_PRESS_THRESHOLD = current_y
+                    print(f"キャリブレーション (2/2) 完了。最大筆圧しきい値(Y座標) = {Y_MAX_PRESS_THRESHOLD}")
+                    cv2.destroyAllWindows()
+                    return True # ★★★ 本当の return True ★★★
+                else:
+                    print(f"エラー: 最大筆圧({current_y})は、タッチしきい値({Y_TOUCH_THRESHOLD})より大きくする必要があります。")
+            else:
+                print("エラー: 手が検出されていません。 'm' を押す前に手を映してください。")
+        
+        if key == ord('q'):
+            print("キャリブレーションがキャンセルされました。")
+            cv2.destroyAllWindows()
+            return False
+            
     return False
+# ★★★★★ ここまでがキャリブレーション関数の変更 ★★★★★
+
 
 def get_marker_point(target_id, detected_ids, detected_corners):
     if detected_ids is not None:
@@ -215,6 +273,7 @@ def record_data(event_type, timestamp, pressure, pen_pos_norm):
     x, y = convert_to_custom_coords(norm_x, norm_y)
     cell_id = get_cell_id(norm_x, norm_y)
     
+    # ★ pressure は (0〜8) の整数が渡される
     drawing_data.append({
         'timestamp': timestamp, 'event_type': event_type, 'stroke_id': stroke_count,
         'x': f"{x:.2f}", 'y': f"{y:.2f}", 'pressure': f"{pressure:.4f}", 'cell_id': cell_id
@@ -249,8 +308,8 @@ cap_side.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap_side.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 print(f"Sideカメラ解像度: {cap_side.get(cv2.CAP_PROP_FRAME_WIDTH)} x {cap_side.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
 
-# 5.2. Sideカメラのキャリブレーション
-if not calibrate_side_camera(cap_side):
+# 5.2. Sideカメラのキャリブレーション (★関数名変更)
+if not calibrate_pressure_range(cap_side):
     sys.exit("キャリブレーションがキャンセルされました。")
 
 # 5.3. メインループの準備
@@ -283,10 +342,14 @@ while True:
     
     M_to_use = M_locked if (is_recording_session and M_locked is not None) else M_live
 
-    # 5.6. Sideカメラの処理 (筆圧Z軸の検出)
+    # ★★★★★ 5.6. Sideカメラの処理 (筆圧Z軸の検出) - 内容を大幅に修正 ★★★★★
     is_touching_now = False # このフレームでタッチしているか
+    current_pressure_level = 0 # 0(air) から 8(max)
+    
     frame_side_rgb = cv2.cvtColor(frame_side, cv2.COLOR_BGR2RGB)
     results_side = hands_side.process(frame_side_rgb)
+    
+    pen_y_side = -1 # 検出されなかった場合のデフォルト
     
     if results_side.multi_hand_landmarks:
         h_side, w_side, _ = frame_side.shape
@@ -294,16 +357,41 @@ while True:
         pen_y_side = int(landmark.y * h_side)
         
         # しきい値と比較 (注意: ピクセルY座標は「下」に行くほど値が大きくなる)
-        if pen_y_side >= Y_TOUCH_THRESHOLD:
+        if pen_y_side < Y_TOUCH_THRESHOLD:
+            is_touching_now = False
+            current_pressure_level = 0
+        elif pen_y_side >= Y_MAX_PRESS_THRESHOLD:
             is_touching_now = True
+            current_pressure_level = 8
+        else: # Y_TOUCH_THRESHOLD <= pen_y_side < Y_MAX_PRESS_THRESHOLD
+            is_touching_now = True
+            # 0.0 から 1.0 の範囲に正規化
+            touch_range = float(Y_MAX_PRESS_THRESHOLD - Y_TOUCH_THRESHOLD)
+            current_depth = float(pen_y_side - Y_TOUCH_THRESHOLD)
             
-        # Sideカメラのプレビューに状態を描画
-        cv2.line(frame_side, (0, Y_TOUCH_THRESHOLD), (w_side, Y_TOUCH_THRESHOLD), (0, 255, 255), 2)
-        cv2.putText(frame_side, f"TOUCH_Y_LEVEL: {Y_TOUCH_THRESHOLD}", (10, Y_TOUCH_THRESHOLD - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        px_side = int(landmark.x * w_side)
+            if touch_range > 0: # ゼロ除算を避ける
+                normalized_pressure = current_depth / touch_range
+                # 0から8の9段階にマッピング
+                current_pressure_level = int(round(normalized_pressure * 8))
+            else:
+                current_pressure_level = 0 # 範囲が0の場合は安全に0を返す
+        
+    # Sideカメラのプレビューに状態を描画
+    cv2.line(frame_side, (0, Y_TOUCH_THRESHOLD), (w_side, Y_TOUCH_THRESHOLD), (0, 255, 255), 2)
+    cv2.putText(frame_side, f"P=0 Y:{Y_TOUCH_THRESHOLD}", (10, Y_TOUCH_THRESHOLD - 10), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+    
+    cv2.line(frame_side, (0, Y_MAX_PRESS_THRESHOLD), (w_side, Y_MAX_PRESS_THRESHOLD), (0, 165, 255), 2)
+    cv2.putText(frame_side, f"P=8 Y:{Y_MAX_PRESS_THRESHOLD}", (10, Y_MAX_PRESS_THRESHOLD - 10), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+    
+    if pen_y_side != -1 and results_side.multi_hand_landmarks: # 検出されている場合のみ
+        px_side = int(results_side.multi_hand_landmarks[0].landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x * w_side)
         color = (0, 0, 255) if is_touching_now else (0, 255, 0)
         cv2.circle(frame_side, (px_side, pen_y_side), 8, color, -1)
+        cv2.putText(frame_side, f"Pressure: {current_pressure_level}", (px_side + 10, pen_y_side), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+    # ★★★★★ ここまでがSideカメラ処理の変更 ★★★★★
 
 
     # 5.7. Topカメラの処理 (X/Y座標検出)
@@ -322,24 +410,27 @@ while True:
             pen_pos_norm = (pen_pos_norm_raw[0][0][0], pen_pos_norm_raw[0][0][1])
             last_pen_pos_norm = pen_pos_norm # 最後に検出したX/Y位置を保持
 
-    # 5.8. 状態機械 (State Machine) による自動記録
+    # ★★★★★ 5.8. 状態機械 (State Machine) による自動記録 - 修正 ★★★★★
     if is_recording_session and last_pen_pos_norm is not None:
         
         if is_touching_now and not is_pen_down:
             # --- 状態：Pen Down (触れた瞬間) ---
             is_pen_down = True
             stroke_count += 1
-            print(f"Stroke {stroke_count} START (Down)")
-            record_data('down', current_time, PRESSURE_MAX, last_pen_pos_norm)
+            print(f"Stroke {stroke_count} START (Down) - Pressure: {current_pressure_level}")
+            # ★ 筆圧を current_pressure_level に変更
+            record_data('down', current_time, current_pressure_level, last_pen_pos_norm)
         
         elif is_touching_now and is_pen_down:
             # --- 状態：Pen Move (触れ続けている) ---
-            record_data('move', current_time, PRESSURE_MAX, last_pen_pos_norm)
+            # ★ 筆圧を current_pressure_level に変更
+            record_data('move', current_time, current_pressure_level, last_pen_pos_norm)
             
         elif not is_touching_now and is_pen_down:
             # --- 状態：Pen Up (離れた瞬間) ---
             is_pen_down = False
             print(f"Stroke {stroke_count} END (Up)")
+            # ★ 'up' イベントは筆圧 0 のまま
             record_data('up', current_time, 0, last_pen_pos_norm)
         
         # (not is_touching_now and not is_pen_down の場合は「空中」なので記録しない)
@@ -364,7 +455,7 @@ while True:
             if M_live is not None:
                 M_locked = M_live # 範囲をロック
                 is_recording_session = True
-                print("--- 記録セッション開始 --- (筆の上下を自動検出します)")
+                print("--- 記録セッション開始 --- (筆の上下と筆圧[0-8]を自動検出します)")
             else:
                 print("エラー: 4隅のマーカーが認識されていません。")
         else:
