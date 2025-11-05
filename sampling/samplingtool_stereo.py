@@ -29,7 +29,6 @@ hands_side = mp_hands.Hands(
 
 # 座標系の設定
 COORD_LIMIT = 200.0
-# PRESSURE_MAX = 8.0 # ★使わなくなるが、念のため残す
 GRID_SIZE = 8
 SAMPLING_INTERVAL = 0.05
 WARPED_SIZE = 800
@@ -42,12 +41,14 @@ cell_transitions = []
 # --- 3. 状態変数 ---
 is_recording_session = False # 's'キーでトグルするセッション全体の状態
 is_pen_down = False         # 筆が紙に触れているか (自動検出)
+is_manually_paused = False  # ★ 'p'キーでトグルする手動一時停止の状態
 stroke_count = 0
 last_cell_id = -1
 last_record_time = 0
 last_pen_pos_norm = None 
 M_live = None   
 M_locked = None 
+TARGET_HAND = "Any"         # ★ 追跡対象の手 ("Left", "Right", "Any")
 
 # ★ 筆圧キャリブレーション用の変数 (変更)
 Y_TOUCH_THRESHOLD = -1     # キャリブレーションで決定されるY座標 (筆圧 0)
@@ -97,8 +98,54 @@ def select_camera_index(prompt_text):
     cv2.destroyAllWindows()
     return selected_index
 
+# ★★★★★ 新規追加 ★★★★★
+def select_target_hand():
+    """ユーザーに追跡する手を選択させる"""
+    print("\n--- 追跡する手を選択 ---")
+    print(" [l] 左手のみ (Left)")
+    print(" [r] 右手のみ (Right)")
+    print(" [a] どちらでも (Any) - デフォルト")
+    
+    while True:
+        # コンソールからの入力を待つ (input() はGUIウィンドウとは別)
+        key_in = input("使用する手を選んでください (l/r/a): ").strip().lower()
+        if key_in == 'l':
+            print("-> 左手のみを追跡します。")
+            return "Left"
+        elif key_in == 'r':
+            print("-> 右手のみを追跡します。")
+            return "Right"
+        elif key_in == 'a' or key_in == '': # Enterのみでも "Any"
+            print("-> 検出された最初の手を追跡します (Any)。")
+            return "Any"
+        else:
+            print("無効な入力です。'l', 'r', 'a' のいずれかを入力してください。")
+
+# ★★★★★ 新規追加 ★★★★★
+def get_target_hand_landmarks(results, target_hand_label):
+    """
+    検出結果から、指定された手（"Left", "Right", "Any"）のランドマークを取得する
+    """
+    if not results.multi_hand_landmarks:
+        return None # 手が検出されていない
+
+    if target_hand_label == "Any":
+        # "Any"なら最初の手を返す (max_num_hands=1 なのでこれで良い)
+        return results.multi_hand_landmarks[0] 
+
+    if not results.multi_handedness:
+        # 'Any' 以外が指定されているのに利き手情報がない場合は特定できない
+        return None 
+
+    for i, handedness in enumerate(results.multi_handedness):
+        label = handedness.classification[0].label
+        if label == target_hand_label:
+            return results.multi_hand_landmarks[i] # 一致する手を返す
+    
+    return None # 指定された手が見つからなかった
+
 # ★★★★★ 関数名を変更し、内容を大幅に修正 ★★★★★
-def calibrate_pressure_range(cap_side):
+def calibrate_pressure_range(cap_side, target_hand_label): # ★ 引数 target_hand_label を追加
     """Side-Viewカメラの筆圧(Z軸)キャリブレーションを2段階で行う"""
     global Y_TOUCH_THRESHOLD, Y_MAX_PRESS_THRESHOLD
     
@@ -119,12 +166,11 @@ def calibrate_pressure_range(cap_side):
         
         h, w, _ = frame.shape
         
-        if results.multi_hand_landmarks:
-            hand_landmarks = results.multi_hand_landmarks[0]
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            
+        hand_landmarks = get_target_hand_landmarks(results, target_hand_label) # ★ 変更
+        
+        if hand_landmarks: # ★ 変更
             # 人差し指の先端(ID 8)を取得
-            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] # ★ 変更
             
             # ピクセル座標に変換 (Y座標のみ重要)
             current_y = int(landmark.y * h)
@@ -170,10 +216,10 @@ def calibrate_pressure_range(cap_side):
         results = hands_side.process(frame_rgb)
         h, w, _ = frame.shape
 
-        if results.multi_hand_landmarks:
-            hand_landmarks = results.multi_hand_landmarks[0]
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        hand_landmarks = get_target_hand_landmarks(results, target_hand_label) # ★ 変更
+
+        if hand_landmarks: # ★ 変更
+            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] # ★ 変更
             current_y = int(landmark.y * h)
             current_x = int(landmark.x * w)
             
@@ -308,14 +354,23 @@ cap_side.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap_side.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 print(f"Sideカメラ解像度: {cap_side.get(cv2.CAP_PROP_FRAME_WIDTH)} x {cap_side.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
 
-# 5.2. Sideカメラのキャリブレーション (★関数名変更)
-if not calibrate_pressure_range(cap_side):
+# ★★★★★ 5.1b. 追跡する手の選択 (新規追加) ★★★★★
+TARGET_HAND = select_target_hand()
+# MediaPipeの設定を更新 (max_num_hands=1 のままでOK)
+# 利き手識別のために max_num_hands=2 にすると、Top/Sideで別の手が選ばれる可能性があり
+# 逆に不安定になるため、max_num_hands=1 のまま「指定された手」だけに応答するロジックとする。
+print(f"追跡対象の手: {TARGET_HAND}")
+
+
+# 5.2. Sideカメラのキャリブレーション (★関数名変更 ＋ 引数追加)
+if not calibrate_pressure_range(cap_side, TARGET_HAND):
     sys.exit("キャリブレーションがキャンセルされました。")
 
 # 5.3. メインループの準備
 dst_pts = np.float32([[0, 0], [WARPED_SIZE, 0], [WARPED_SIZE, WARPED_SIZE], [0, WARPED_SIZE]])
 print("--- トラッキング開始 ---")
-print(" [s] キー: 記録セッションの開始/停止 (筆の上下で自動記録)")
+print(" [s] キー: 記録セッションの開始/停止")
+print(" [p] キー: 記録の手動一時停止/再開 (セッション中のみ)")
 print(" [q] キー: 終了してCSV保存")
 
 while True:
@@ -348,12 +403,13 @@ while True:
     
     frame_side_rgb = cv2.cvtColor(frame_side, cv2.COLOR_BGR2RGB)
     results_side = hands_side.process(frame_side_rgb)
+    hand_landmarks_side = get_target_hand_landmarks(results_side, TARGET_HAND) # ★ 変更
     
     pen_y_side = -1 # 検出されなかった場合のデフォルト
     
-    if results_side.multi_hand_landmarks:
+    if hand_landmarks_side: # ★ 変更
         h_side, w_side, _ = frame_side.shape
-        landmark = results_side.multi_hand_landmarks[0].landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        landmark = hand_landmarks_side.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] # ★ 変更
         pen_y_side = int(landmark.y * h_side)
         
         # しきい値と比較 (注意: ピクセルY座標は「下」に行くほど値が大きくなる)
@@ -385,8 +441,8 @@ while True:
     cv2.putText(frame_side, f"P=8 Y:{Y_MAX_PRESS_THRESHOLD}", (10, Y_MAX_PRESS_THRESHOLD - 10), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
     
-    if pen_y_side != -1 and results_side.multi_hand_landmarks: # 検出されている場合のみ
-        px_side = int(results_side.multi_hand_landmarks[0].landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x * w_side)
+    if pen_y_side != -1 and hand_landmarks_side: # 検出されている場合のみ ★ 変更
+        px_side = int(hand_landmarks_side.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x * w_side) # ★ 変更
         color = (0, 0, 255) if is_touching_now else (0, 255, 0)
         cv2.circle(frame_side, (px_side, pen_y_side), 8, color, -1)
         cv2.putText(frame_side, f"Pressure: {current_pressure_level}", (px_side + 10, pen_y_side), 
@@ -399,10 +455,11 @@ while True:
     if M_to_use is not None:
         frame_top_rgb = cv2.cvtColor(frame_top, cv2.COLOR_BGR2RGB)
         results_top = hands_top.process(frame_top_rgb)
+        hand_landmarks_top = get_target_hand_landmarks(results_top, TARGET_HAND) # ★ 変更
         
-        if results_top.multi_hand_landmarks:
+        if hand_landmarks_top: # ★ 変更
             h_top, w_top, _ = frame_top.shape
-            landmark_top = results_top.multi_hand_landmarks[0].landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            landmark_top = hand_landmarks_top.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] # ★ 変更
             pen_center_pixel = (int(landmark_top.x * w_top), int(landmark_top.y * h_top))
             
             pen_pixel_np = np.float32([[pen_center_pixel]])
@@ -411,7 +468,8 @@ while True:
             last_pen_pos_norm = pen_pos_norm # 最後に検出したX/Y位置を保持
 
     # ★★★★★ 5.8. 状態機械 (State Machine) による自動記録 - 修正 ★★★★★
-    if is_recording_session and last_pen_pos_norm is not None:
+    # ★ is_manually_paused でないことを条件に追加
+    if is_recording_session and not is_manually_paused and last_pen_pos_norm is not None:
         
         if is_touching_now and not is_pen_down:
             # --- 状態：Pen Down (触れた瞬間) ---
@@ -438,10 +496,16 @@ while True:
     # 5.9. 画面表示
     status_text = "RECORDING" if is_recording_session else "PAUSED"
     color = (0, 0, 255) if is_recording_session else (0, 165, 255)
-    if M_live is None and not is_recording_session:
+
+    if is_recording_session and is_manually_paused: # ★ 手動一時停止の表示を追加
+        status_text = "MANUALLY PAUSED"
+        color = (0, 255, 255) # 黄色
+    elif M_live is None and not is_recording_session:
         status_text = "AREA NOT FOUND"
         color = (100, 100, 100)
-    cv2.putText(frame_top, status_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+    
+    # ★ 表示テキストに追跡対象の手を追加
+    cv2.putText(frame_top, f"{status_text} (Hand: {TARGET_HAND})", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
     
     cv2.imshow("Top-Down View (X/Y)", frame_top)
     cv2.imshow("Side View (Z/Pressure)", frame_side)
@@ -450,6 +514,15 @@ while True:
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break
+
+    if key == ord('p'): # ★ 'p' キー (一時停止) の処理を追加
+        if is_recording_session: # 記録セッション中のみ有効
+            is_manually_paused = not is_manually_paused
+            if is_manually_paused:
+                print("--- 記録を一時停止 (Manual Pause) ---")
+            else:
+                print("--- 記録を再開 ---")
+
     if key == ord('s'):
         if not is_recording_session:
             if M_live is not None:
@@ -461,6 +534,7 @@ while True:
         else:
             is_recording_session = False
             is_pen_down = False # 記録停止時にペンステータスをリセット
+            is_manually_paused = False # ★ 一時停止もリセット
             M_locked = None
             print("--- 記録セッション停止 ---")
 
