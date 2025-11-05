@@ -48,7 +48,7 @@ last_record_time = 0
 last_pen_pos_norm = None 
 M_live = None   
 M_locked = None 
-TARGET_HAND = "Any"         # ★ 追跡対象の手 ("Left", "Right", "Any")
+TARGET_HAND = "Right"         # ★ 追跡対象の手 ("Left", "Right", "Any")
 
 # ★ 筆圧キャリブレーション用の変数 (変更)
 Y_TOUCH_THRESHOLD = -1     # キャリブレーションで決定されるY座標 (筆圧 0)
