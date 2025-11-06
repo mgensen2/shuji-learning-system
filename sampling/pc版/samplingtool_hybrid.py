@@ -9,32 +9,14 @@ import mediapipe as mp
 
 # --- 1. 設定項目 ---
 # ArUcoマーカーの設定 (範囲検出用)
-ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
-DETECTOR_PARAMS = aruco.DetectorParameters()
-DETECTOR_PARAMS.polygonalApproxAccuracyRate = 0.05
-DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
-
-CORNER_IDS = [0, 1, 2, 3] # [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
-CORNER_INDEX_MAP = { 0: 2, 1: 3, 2: 0, 3: 1 }
-
-# ★★★ 新規追加 ★★★
-# 筆に取り付けたマーカーのID (0,1,2,3 以外にする)
+# ... (変更なし) ...
 BRUSH_MARKER_ID = 50 
 
 # MediaPipe Hands の初期化
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
-hands_top = mp.hands.Hands(
-    max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
-hands_side = mp.hands.Hands(
-    max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+# ... (変更なし) ...
 
 # 座標系の設定
-COORD_LIMIT = 200.0
-GRID_SIZE = 8
-SAMPLING_INTERVAL = 0.05
-WARPED_SIZE = 800
-CELL_SIZE_PX = WARPED_SIZE / GRID_SIZE
+# ... (変更なし) ...
 
 # --- 2. データ格納リスト ---
 drawing_data = []     
@@ -44,6 +26,7 @@ cell_transitions = []
 is_recording_session = False
 is_pen_down = False         
 is_manually_paused = False  
+is_area_locked = False        # ★ 新規追加: lキーでエリアロックを管理
 stroke_count = 0
 last_cell_id = -1
 last_record_time = 0
@@ -56,9 +39,9 @@ TARGET_HAND = "Any"
 Y_TOUCH_THRESHOLD = -1     
 Y_MAX_PRESS_THRESHOLD = -1 
 
-# ★★★ 新規追加：筆オフセット用 ★★★
-BRUSH_TIP_OFFSET_LOCAL = None # (local_x, local_y) マーカーのローカル座標系でのオフセット
-is_brush_calibrated = False   # 'o' キーでキャリブレーションが完了したか
+# 筆オフセット用
+BRUSH_TIP_OFFSET_LOCAL = None 
+is_brush_calibrated = False   
 
 
 # --- 4. ヘルパー関数 ---
@@ -307,18 +290,7 @@ def record_data(event_type, timestamp, pressure, pen_pos_norm):
 
 # --- 5. メイン処理 ---
 # 5.1. カメラの選択
-top_cam_index = select_camera_index("Top-Down (X/Y) Camera")
-if top_cam_index is None: sys.exit("Top-Downカメラが選択されませんでした。")
-cap_top = cv2.VideoCapture(top_cam_index)
-cap_top.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap_top.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-print(f"Topカメラ解像度: {cap_top.get(cv2.CAP_PROP_FRAME_WIDTH)} x {cap_top.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
-
-side_cam_index = select_camera_index("Side-View (Z/Pressure) Camera")
-if side_cam_index is None: sys.exit("Side-Viewカメラが選択されませんでした。")
-cap_side = cv2.VideoCapture(side_cam_index)
-cap_side.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap_side.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+# ... (変更なし) ...
 print(f"Sideカメラ解像度: {cap_side.get(cv2.CAP_PROP_FRAME_WIDTH)} x {cap_side.get(cv2.CAP_PROP_FRAME_HEIGHT)}")
 
 # 5.1b. 追跡する手の選択
@@ -331,180 +303,85 @@ if not calibrate_pressure_range(cap_side, TARGET_HAND):
 # 5.3. メインループの準備
 dst_pts = np.float32([[0, 0], [WARPED_SIZE, 0], [WARPED_SIZE, WARPED_SIZE], [0, WARPED_SIZE]])
 print("\n--- トラッキング開始 ---")
-print("★ 筆の先端を左上(ID=0)マーカーの中心に合わせ [o] キーでオフセット調整してください。")
-print(" [s] キー: 記録セッションの開始/停止")
+# ★★★ キー説明を変更 ★★★
+print(" [l] キー: 記録エリアのロック / アンロック")
+print(" [o] キー: 筆オフセット調整 (エリアロック後に実行)")
+print(" [s] キー: 記録セッションの開始/停止 (エリアロック＆オフセット調整後に実行)")
 print(" [p] キー: 記録の手動一時停止/再開 (セッション中のみ)")
 print(" [q] キー: 終了してCSV保存")
+print("\n★ 推奨手順: [l] -> [o] -> [s]")
 
 while True:
     # 5.4. 両方のカメラからフレームを取得
-    ret_top, frame_top = cap_top.read()
-    ret_side, frame_side = cap_side.read()
-    if not ret_top or not ret_side:
-        print("エラー: カメラフレームを読み込めません")
-        break
-    
+# ... (変更なし) ...
     current_time = time.time()
     
     # 5.5. Topカメラの処理 (ArUco 範囲検出)
-    (corners_top, ids_top, _) = DETECTOR.detectMarkers(frame_top)
-    if ids_top is not None:
-        aruco.drawDetectedMarkers(frame_top, corners_top, ids_top)
-
-    src_pts = [get_marker_point(id, ids_top, corners_top) for id in CORNER_IDS]
-    
-    if all(pt is not None for pt in src_pts):
-        src_pts_np = np.float32(src_pts)
+# ... (変更なし) ...
         M_live = cv2.getPerspectiveTransform(src_pts_np, dst_pts) 
         cv2.polylines(frame_top, [src_pts_np.astype(int)], True, (0, 255, 0), 2)
     else:
         M_live = None # 4隅が揃っていなければ M_live は None
     
-    M_to_use = M_locked if (is_recording_session and M_locked is not None) else M_live
+    # ★★★ 座標系行列の選択ロジックを変更 ★★★
+    # is_recording_session ではなく is_area_locked を基準にする
+    M_to_use = M_locked if is_area_locked else M_live
 
-    # ★★★ 5.5b. 筆マーカーの検出 (新規) ★★★
-    # M_liveの計算と並行して、筆マーカーのピクセル座標情報を抽出する
-    brush_marker_corners_pixel = None
-    brush_marker_center_pixel = None
-    brush_marker_xaxis_pixel = None
-    brush_marker_yaxis_pixel = None
-
-    if ids_top is not None:
-        for i, marker_id in enumerate(ids_top.flatten()):
-            if marker_id == BRUSH_MARKER_ID:
-                brush_marker_corners_pixel = corners_top[i][0].astype(int)
-                brush_marker_center_pixel = brush_marker_corners_pixel.mean(axis=0).astype(int)
-                # マーカーのローカルX軸 (corner[1] - corner[0])
-                brush_marker_xaxis_pixel = brush_marker_corners_pixel[1] - brush_marker_corners_pixel[0]
-                # マーカーのローカルY軸 (corner[3] - corner[0])
-                brush_marker_yaxis_pixel = brush_marker_corners_pixel[3] - brush_marker_corners_pixel[0]
-                # マーカーをシアン(Cyan)で囲む
+    # 5.5b. 筆マーカーの検出 (新規)
+# ... (変更なし) ...
                 cv2.polylines(frame_top, [brush_marker_corners_pixel], True, (255, 255, 0), 2)
                 break
 
     # 5.6. Sideカメラの処理 (筆圧Z軸の検出)
-    is_touching_now = False 
-    current_pressure_level = 0 
-    frame_side_rgb = cv2.cvtColor(frame_side, cv2.COLOR_BGR2RGB)
-    results_side = hands_side.process(frame_side_rgb)
-    hand_landmarks_side = get_target_hand_landmarks(results_side, TARGET_HAND) 
-    
-    pen_y_side = -1 
-    if hand_landmarks_side: 
-        h_side, w_side, _ = frame_side.shape
-        landmark = hand_landmarks_side.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
-        pen_y_side = int(landmark.y * h_side)
-        
-        if pen_y_side < Y_TOUCH_THRESHOLD:
-            is_touching_now = False
-            current_pressure_level = 0
-        elif pen_y_side >= Y_MAX_PRESS_THRESHOLD:
-            is_touching_now = True
-            current_pressure_level = 8
-        else: # Y_TOUCH_THRESHOLD <= pen_y_side < Y_MAX_PRESS_THRESHOLD
-            is_touching_now = True
-            touch_range = float(Y_MAX_PRESS_THRESHOLD - Y_TOUCH_THRESHOLD)
-            current_depth = float(pen_y_side - Y_TOUCH_THRESHOLD)
-            if touch_range > 0: 
-                normalized_pressure = current_depth / touch_range
-                current_pressure_level = int(round(normalized_pressure * 8))
-            else:
-                current_pressure_level = 0 
-        
-    cv2.line(frame_side, (0, Y_TOUCH_THRESHOLD), (w_side, Y_TOUCH_THRESHOLD), (0, 255, 255), 2)
-    cv2.putText(frame_side, f"P=0 Y:{Y_TOUCH_THRESHOLD}", (10, Y_TOUCH_THRESHOLD - 10), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-    cv2.line(frame_side, (0, Y_MAX_PRESS_THRESHOLD), (w_side, Y_MAX_PRESS_THRESHOLD), (0, 165, 255), 2)
-    cv2.putText(frame_side, f"P=8 Y:{Y_MAX_PRESS_THRESHOLD}", (10, Y_MAX_PRESS_THRESHOLD - 10), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-    
-    if pen_y_side != -1 and hand_landmarks_side: 
-        px_side = int(hand_landmarks_side.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x * w_side) 
-        color = (0, 0, 255) if is_touching_now else (0, 255, 0)
-        cv2.circle(frame_side, (px_side, pen_y_side), 8, color, -1)
-        cv2.putText(frame_side, f"Pressure: {current_pressure_level}", (px_side + 10, pen_y_side), 
+# ... (変更なし) ...
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    # ★★★ 5.7. Topカメラの処理 (X/Y座標検出) - ハイブリッド方式 ★★★
-    pen_pos_norm = None
-    if M_to_use is not None:
-        
-        # --- 1. [優先] 筆マーカー(ID=50)から計算 ---
-        # オフセット調整が完了しており、かつ筆マーカーが見えている場合
-        if is_brush_calibrated and brush_marker_center_pixel is not None:
-            local_x, local_y = BRUSH_TIP_OFFSET_LOCAL
-            
-            # ローカルオフセットを現在のマーカーの向き（X軸, Y軸）に基づいて回転・適用
-            tip_vector_pixel = (brush_marker_xaxis_pixel * local_x) + (brush_marker_yaxis_pixel * local_y)
-            pen_tip_pixel = (brush_marker_center_pixel + tip_vector_pixel).astype(int)
-            
-            # ピクセル座標を射影変換
-            pen_pixel_np = np.float32([[pen_tip_pixel]])
-            pen_pos_norm_raw = cv2.perspectiveTransform(pen_pixel_np, M_to_use)
-            pen_pos_norm = (pen_pos_norm_raw[0][0][0], pen_pos_norm_raw[0][0][1])
-            
-            # ★ 計算された筆の先端を「青」で描画
-            cv2.circle(frame_top, tuple(pen_tip_pixel), 8, (255, 100, 0), -1)
-
-        # --- 2. [予備] 指の先端で追跡 ---
-        # 筆マーカーで計算できなかった場合
-        if pen_pos_norm is None:
-            frame_top_rgb = cv2.cvtColor(frame_top, cv2.COLOR_BGR2RGB)
-            results_top = hands_top.process(frame_top_rgb)
-            hand_landmarks_top = get_target_hand_landmarks(results_top, TARGET_HAND) 
-            
-            if hand_landmarks_top: 
-                h_top, w_top, _ = frame_top.shape
-                landmark_top = hand_landmarks_top.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
-                pen_center_pixel = (int(landmark_top.x * w_top), int(landmark_top.y * h_top))
-                
-                pen_pixel_np = np.float32([[pen_center_pixel]])
-                pen_pos_norm_raw = cv2.perspectiveTransform(pen_pixel_np, M_to_use)
-                pen_pos_norm = (pen_pos_norm_raw[0][0][0], pen_pos_norm_raw[0][0][1])
-                
-                # ★ 指の先端を「赤」で描画
-                cv2.circle(frame_top, tuple(pen_center_pixel), 8, (0, 0, 255), -1)
-
+    # 5.7. Topカメラの処理 (X/Y座標検出) - ハイブリッド方式
+# ... (変更なし) ...
         # 最終的に座標が取得できていれば、それを保持する
         if pen_pos_norm is not None:
             last_pen_pos_norm = pen_pos_norm
 
     # 5.8. 状態機械 (State Machine) による自動記録
-    if is_recording_session and not is_manually_paused and last_pen_pos_norm is not None:
-        if is_touching_now and not is_pen_down:
-            is_pen_down = True
-            stroke_count += 1
-            print(f"Stroke {stroke_count} START (Down) - Pressure: {current_pressure_level}")
-            record_data('down', current_time, current_pressure_level, last_pen_pos_norm)
-        elif is_touching_now and is_pen_down:
-            record_data('move', current_time, current_pressure_level, last_pen_pos_norm)
-        elif not is_touching_now and is_pen_down:
-            is_pen_down = False
-            print(f"Stroke {stroke_count} END (Up)")
+# ... (変更なし) ...
             record_data('up', current_time, 0, last_pen_pos_norm)
 
-    # 5.9. 画面表示
-    status_text = "RECORDING" if is_recording_session else "PAUSED"
-    color = (0, 0, 255) if is_recording_session else (0, 165, 255)
+    # ★★★ 5.9. 画面表示 (変更) ★★★
+    status_text = "RECORDING" if is_recording_session else "STOPPED" # PAUSED -> STOPPED
+    color = (0, 0, 255) if is_recording_session else (100, 100, 100) # PAUSEDの色をやめる
+
     if is_recording_session and is_manually_paused: 
         status_text = "MANUALLY PAUSED"
         color = (0, 255, 255) 
-    elif M_live is None and not is_recording_session:
+    elif M_live is None and not is_area_locked: # ★ M_live がなく、ロックもされてない
         status_text = "AREA NOT FOUND"
         color = (100, 100, 100)
     
-    # オフセット調整がまだなら、警告を出す
-    if not is_brush_calibrated and M_live is not None:
-        cv2.putText(frame_top, "CALIBRATE BRUSH OFFSET (Press 'o')", (20, 80), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
-
-    cv2.putText(frame_top, f"{status_text} (Hand: {TARGET_HAND})", (20, 40), 
+    cv2.putText(frame_top, f"STATUS: {status_text} (Hand: {TARGET_HAND})", (20, 40), 
                 cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
     
+    # ★ エリアロック状態の表示 (新規追加)
+    if is_area_locked:
+        area_status_text = "AREA LOCKED"
+        area_color = (0, 255, 0) # 緑
+    else:
+        area_status_text = "AREA UNLOCKED"
+        area_color = (0, 165, 255) # オレンジ
+    cv2.putText(frame_top, area_status_text, (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, area_color, 2)
+
+    # オフセット調整がまだなら、警告を出す
+    if is_area_locked and not is_brush_calibrated: # ★ エリアロック後のみ警告
+        cv2.putText(frame_top, "CALIBRATE BRUSH OFFSET (Press 'o')", (20, 80), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
+    elif not is_area_locked and M_live is None:
+         cv2.putText(frame_top, "Find Area Markers (0,1,2,3) to Lock", (20, 80), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2)
+
+
     cv2.imshow("Top-Down View (X/Y)", frame_top)
     cv2.imshow("Side View (Z/Pressure)", frame_side)
 
-    # 5.10. キー入力
+    # ★★★ 5.10. キー入力 (大幅に変更) ★★★
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break
@@ -517,59 +394,75 @@ while True:
             else:
                 print("--- 記録を再開 ---")
 
-    # ★★★ 新規： 'o' キーの処理 (オフセット調整) ★★★
+    # ★ 'l' キーの処理 (新規追加)
+    if key == ord('l'):
+        if is_recording_session:
+            print("エラー: 記録セッション中はエリアロックを変更できません。")
+        else:
+            if not is_area_locked:
+                # これからロックする
+                if M_live is not None:
+                    M_locked = M_live
+                    is_area_locked = True
+                    print("--- エリアをロックしました ---")
+                    print("★ 次に [o] キーで筆のオフセットを調整してください。")
+                else:
+                    print("エラー: 4隅のマーカーが認識されていません。ロックできません。")
+            else:
+                # ロックを解除する
+                M_locked = None
+                is_area_locked = False
+                is_brush_calibrated = False # ★ エリアが変わったらオフセットもリセット
+                print("--- エリアのロックを解除しました (筆オフセットもリセットされました) ---")
+
+    # ★ 'o' キーの処理 (条件変更)
     if key == ord('o'):
         if is_recording_session:
             print("エラー: オフセット調整は記録セッション開始前に行ってください。")
-        elif M_live is None:
-            print("エラー: 4隅のマーカー (0,1,2,3) が認識できません。")
+        elif not is_area_locked: # ★ ロックされていることが必須
+            print("エラー: 'l'キーでエリアをロックしてからオフセット調整を行ってください。")
+        elif M_to_use is None: # M_locked が None (lキーでセットされるはずだが念のため)
+            print("エラー: エリアがロックされていません。")
         elif brush_marker_center_pixel is None:
             print(f"エラー: 筆マーカー (ID={BRUSH_MARKER_ID}) が認識できません。")
-        elif src_pts[0] is None: # src_pts[0] は Top-Left (ID=0) の基準点
+        elif src_pts[0] is None: 
             print("エラー: 左上マーカー (ID=0) が認識できません。")
         else:
             # --- オフセット計算を実行 ---
-            # ターゲット（筆の先端を合わせる場所）= ID=0 の基準点ピクセル座標
             target_pos_pixel = src_pts[0].astype(int)
-            
-            # 筆マーカーの中心からターゲットへのベクトル（ピクセル座標系）
             tip_vector_pixel = target_pos_pixel - brush_marker_center_pixel
-            
-            # 筆マーカーのローカルX/Y軸の長さの2乗
             norm_x_sq = np.linalg.norm(brush_marker_xaxis_pixel)**2
             norm_y_sq = np.linalg.norm(brush_marker_yaxis_pixel)**2
 
             if norm_x_sq == 0 or norm_y_sq == 0:
                 print("エラー: 筆マーカーが歪んでいます。")
             else:
-                # tip_vector_pixel をマーカーのローカルX軸、Y軸に射影する
                 local_x = np.dot(tip_vector_pixel, brush_marker_xaxis_pixel) / norm_x_sq
                 local_y = np.dot(tip_vector_pixel, brush_marker_yaxis_pixel) / norm_y_sq
-                
                 BRUSH_TIP_OFFSET_LOCAL = (local_x, local_y)
                 is_brush_calibrated = True
                 print(f"--- 筆オフセット調整 完了 ---")
-                print(f"  ターゲット (ID=0): {target_pos_pixel}")
-                print(f"  マーカー中心: {brush_marker_center_pixel}")
                 print(f"  ローカルオフセット: ({local_x:.4f}, {local_y:.4f})")
+                print("★ [s] キーで記録を開始できます。")
 
+
+    # ★ 's' キーの処理 (条件変更)
     if key == ord('s'):
         if not is_recording_session:
-            if M_live is not None:
-                # ★ オフセット調整が完了していることを確認
-                if not is_brush_calibrated:
-                    print("エラー: 'o'キーで筆のオフセット調整を先に行ってください。")
-                else:
-                    M_locked = M_live # 範囲をロック
-                    is_recording_session = True
-                    print("--- 記録セッション開始 ---")
+            # ★ エリアロックとオフセット調整が完了しているかチェック
+            if not is_area_locked:
+                print("エラー: 'l'キーでエリアをロックしてください。")
+            elif not is_brush_calibrated:
+                print("エラー: 'o'キーで筆のオフセット調整を先に行ってください。")
             else:
-                print("エラー: 4隅のマーカーが認識されていません。")
+                # M_locked = M_live # ★ 削除 (lキーが担当)
+                is_recording_session = True
+                print("--- 記録セッション開始 ---")
         else:
             is_recording_session = False
             is_pen_down = False 
             is_manually_paused = False 
-            M_locked = None
+            # M_locked = None # ★ 削除 (lキーが担当)
             print("--- 記録セッション停止 ---")
 
 # --- 6. 終了処理 ---
