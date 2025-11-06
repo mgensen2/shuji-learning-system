@@ -10,9 +10,8 @@ DICTIONARY_NAME = cv2.aruco.DICT_4X4_100 # 使用するArUcoマーカーの辞�
 
 # --- ボードの定義 ---
 dictionary = cv2.aruco.getPredefinedDictionary(DICTIONARY_NAME)
-board = cv2.aruco.CharucoBoard_create(
-    SQUARES_X,
-    SQUARES_Y,
+board = cv2.aruco.CharucoBoard(
+    (SQUARES_X,SQUARES_Y),
     SQUARE_LENGTH,
     MARKER_LENGTH,
     dictionary
@@ -24,7 +23,7 @@ IMG_WIDTH_PX = 2000
 IMG_HEIGHT_PX = 1400
 
 # ボードを描画
-img = board.draw((IMG_WIDTH_PX, IMG_HEIGHT_PX))
+img = board.generateImage((IMG_WIDTH_PX, IMG_HEIGHT_PX))
 
 # 画像を保存
 output_filename = "charuco_board.png"

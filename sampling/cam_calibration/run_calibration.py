@@ -12,9 +12,8 @@ DICTIONARY_NAME = cv2.aruco.DICT_4X4_100
 
 # --- ボードの定義 (ステップ1と同一) ---
 dictionary = cv2.aruco.getPredefinedDictionary(DICTIONARY_NAME)
-board = cv2.aruco.CharucoBoard_create(
-    SQUARES_X,
-    SQUARES_Y,
+board = cv2.aruco.CharucoBoard(
+    (SQUARES_X,SQUARES_Y),
     SQUARE_LENGTH,
     MARKER_LENGTH,
     dictionary
