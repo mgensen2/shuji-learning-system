@@ -670,41 +670,31 @@ while True:
         elif brush_marker_center_pixel is None:
             print(f"エラー: 筆マーカー (ID={BRUSH_MARKER_ID}) が認識できません。")
         
-        # ★★★ 修正: ID=0 の「中心」をターゲットにする ★★★
-        elif ids_top is None:
+        elif src_pts[0] is None: 
             print("エラー: 左上マーカー (ID=0) が認識できません。")
         else:
-            marker_0_corners_pixel = None
-            for i, marker_id in enumerate(ids_top.flatten()):
-                if marker_id == 0:
-                    marker_0_corners_pixel = corners_top[i][0].astype(int)
-                    break
+            # --- オフセット計算を実行 ---
+            # ★ ターゲット = ID=0 の「右下の角」ピクセル座標
+            # (src_pts[0] は 5.5. で get_marker_point(0, ...) によって計算済み)
+            target_pos_pixel = src_pts[0].astype(int)
             
-            if marker_0_corners_pixel is None:
-                print("エラー: 左上マーカー (ID=0) が認識できません。")
-            # ★★★ ここまでが修正点 ★★★
-            else:
-                # --- オフセット計算を実行 ---
-                # ★ ターゲット = ID=0 の「中心」ピクセル座標
-                target_pos_pixel = marker_0_corners_pixel.mean(axis=0).astype(int)
-                
-                tip_vector_pixel = target_pos_pixel - brush_marker_center_pixel
-                norm_x_sq = np.linalg.norm(brush_marker_xaxis_pixel)**2
-                norm_y_sq = np.linalg.norm(brush_marker_yaxis_pixel)**2
+            tip_vector_pixel = target_pos_pixel - brush_marker_center_pixel
+            norm_x_sq = np.linalg.norm(brush_marker_xaxis_pixel)**2
+            norm_y_sq = np.linalg.norm(brush_marker_yaxis_pixel)**2
 
-                if norm_x_sq == 0 or norm_y_sq == 0:
-                    print("エラー: 筆マーカーが歪んでいます。")
-                else:
-                    local_x = np.dot(tip_vector_pixel, brush_marker_xaxis_pixel) / norm_x_sq
-                    local_y = np.dot(tip_vector_pixel, brush_marker_yaxis_pixel) / norm_y_sq
-                    BRUSH_TIP_OFFSET_LOCAL = (local_x, local_y)
-                    is_brush_calibrated = True
-                    print(f"--- 筆オフセット調整 完了 ---")
-                    print(f"  ターゲット (ID=0 Center): {target_pos_pixel}")
-                    print(f"  マーカー中心 (ID=50): {brush_marker_center_pixel}")
-                    print(f"  ローカルオフセット: ({local_x:.4f}, {local_y:.4f})")
-                    print("★ [k] キーで保存できます。")
-                    print("★ [s] キーで記録を開始できます。")
+            if norm_x_sq == 0 or norm_y_sq == 0:
+                print("エラー: 筆マーカーが歪んでいます。")
+            else:
+                local_x = np.dot(tip_vector_pixel, brush_marker_xaxis_pixel) / norm_x_sq
+                local_y = np.dot(tip_vector_pixel, brush_marker_yaxis_pixel) / norm_y_sq
+                BRUSH_TIP_OFFSET_LOCAL = (local_x, local_y)
+                is_brush_calibrated = True
+                print(f"--- 筆オフセット調整 完了 ---")
+                print(f"  ターゲット (ID=0 Corner): {target_pos_pixel}")
+                print(f"  マーカー中心 (ID=50): {brush_marker_center_pixel}")
+                print(f"  ローカルオフセット: ({local_x:.4f}, {local_y:.4f})")
+                print("★ [k] キーで保存できます。")
+                print("★ [s] キーで記録を開始できます。")
 
 
     # 's' キーの処理 (条件変更)
