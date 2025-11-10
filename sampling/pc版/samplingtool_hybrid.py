@@ -17,21 +17,20 @@ DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
 CORNER_IDS = [0, 1, 2, 3] # [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
 CORNER_INDEX_MAP = { 0: 2, 1: 3, 2: 0, 3: 1 }
 
-BRUSH_MARKER_ID = 50 
+BRUSH_MARKER_ID = 4
 
 # エリアロック/オフセット設定の保存ファイル名
 CALIB_FILE_NAME = 'unpitsu_calibration.npz'
 
-# ★★★ 新規追加 ★★★
 # Topカメラのレンズ歪み補正ファイル
 LENS_CALIB_FILE_NAME = 'top_camera_lens.npz' 
 
 # MediaPipe Hands の初期化
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
-hands_top = mp.hands.Hands(
+hands_top = mp.solutions.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
-hands_side = mp.hands.Hands(
+hands_side = mp.solutions.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 # 座標系の設定
@@ -66,7 +65,7 @@ Y_MAX_PRESS_THRESHOLD = -1
 BRUSH_TIP_OFFSET_LOCAL = None 
 is_brush_calibrated = False   
 
-# ★★★ 新規追加: レンズ歪み補正用 ★★★
+# レンズ歪み補正用
 TOP_CAM_MTX = None
 TOP_CAM_DIST = None
 TOP_CAM_MAP_X = None
@@ -332,7 +331,6 @@ def load_calibration_data():
     else:
         print(f"--- キャリブレーションファイルが見つかりません ({CALIB_FILE_NAME}) ---")
 
-# ★★★ 新規追加 ★★★
 def load_lens_calibration(file_path, frame_size_wh):
     """Top-Downカメラのレンズ歪み補正データを.npzから読み込む"""
     global TOP_CAM_MTX, TOP_CAM_DIST, TOP_CAM_MAP_X, TOP_CAM_MAP_Y
@@ -419,7 +417,7 @@ TARGET_HAND = select_target_hand()
 # 5.1c. NPZキャリブレーションデータの自動読み込み (エリアロック/オフセット)
 load_calibration_data()
 
-# ★★★ 5.1d. NPZレンズ歪み補正データの自動読み込み (新規) ★★★
+# 5.1d. NPZレンズ歪み補正データの自動読み込み (新規)
 load_lens_calibration(LENS_CALIB_FILE_NAME, (top_w, top_h))
 
 # 5.2. Sideカメラのキャリブレーション
@@ -671,26 +669,42 @@ while True:
             print("エラー: エリアがロックされていません。")
         elif brush_marker_center_pixel is None:
             print(f"エラー: 筆マーカー (ID={BRUSH_MARKER_ID}) が認識できません。")
-        elif src_pts[0] is None: 
+        
+        # ★★★ 修正: ID=0 の「中心」をターゲットにする ★★★
+        elif ids_top is None:
             print("エラー: 左上マーカー (ID=0) が認識できません。")
         else:
-            # --- オフセット計算を実行 ---
-            target_pos_pixel = src_pts[0].astype(int)
-            tip_vector_pixel = target_pos_pixel - brush_marker_center_pixel
-            norm_x_sq = np.linalg.norm(brush_marker_xaxis_pixel)**2
-            norm_y_sq = np.linalg.norm(brush_marker_yaxis_pixel)**2
-
-            if norm_x_sq == 0 or norm_y_sq == 0:
-                print("エラー: 筆マーカーが歪んでいます。")
+            marker_0_corners_pixel = None
+            for i, marker_id in enumerate(ids_top.flatten()):
+                if marker_id == 0:
+                    marker_0_corners_pixel = corners_top[i][0].astype(int)
+                    break
+            
+            if marker_0_corners_pixel is None:
+                print("エラー: 左上マーカー (ID=0) が認識できません。")
+            # ★★★ ここまでが修正点 ★★★
             else:
-                local_x = np.dot(tip_vector_pixel, brush_marker_xaxis_pixel) / norm_x_sq
-                local_y = np.dot(tip_vector_pixel, brush_marker_yaxis_pixel) / norm_y_sq
-                BRUSH_TIP_OFFSET_LOCAL = (local_x, local_y)
-                is_brush_calibrated = True
-                print(f"--- 筆オフセット調整 完了 ---")
-                print(f"  ローカルオフセット: ({local_x:.4f}, {local_y:.4f})")
-                print("★ [k] キーで保存できます。")
-                print("★ [s] キーで記録を開始できます。")
+                # --- オフセット計算を実行 ---
+                # ★ ターゲット = ID=0 の「中心」ピクセル座標
+                target_pos_pixel = marker_0_corners_pixel.mean(axis=0).astype(int)
+                
+                tip_vector_pixel = target_pos_pixel - brush_marker_center_pixel
+                norm_x_sq = np.linalg.norm(brush_marker_xaxis_pixel)**2
+                norm_y_sq = np.linalg.norm(brush_marker_yaxis_pixel)**2
+
+                if norm_x_sq == 0 or norm_y_sq == 0:
+                    print("エラー: 筆マーカーが歪んでいます。")
+                else:
+                    local_x = np.dot(tip_vector_pixel, brush_marker_xaxis_pixel) / norm_x_sq
+                    local_y = np.dot(tip_vector_pixel, brush_marker_yaxis_pixel) / norm_y_sq
+                    BRUSH_TIP_OFFSET_LOCAL = (local_x, local_y)
+                    is_brush_calibrated = True
+                    print(f"--- 筆オフセット調整 完了 ---")
+                    print(f"  ターゲット (ID=0 Center): {target_pos_pixel}")
+                    print(f"  マーカー中心 (ID=50): {brush_marker_center_pixel}")
+                    print(f"  ローカルオフセット: ({local_x:.4f}, {local_y:.4f})")
+                    print("★ [k] キーで保存できます。")
+                    print("★ [s] キーで記録を開始できます。")
 
 
     # 's' キーの処理 (条件変更)
