@@ -15,9 +15,21 @@ OUTPUT_CSV_FILE = 'speaker_hits.csv'
 # 3. 仮想グリッドのサイズ (例: 8x8 グリッド)
 GRID_SIZE = 8
 
-# 4. 画像を分析する際の内部解像度 (大きいほど精度が上がるが、処理が重くなる)
-#    (unpitsu_recorder_hybrid.py と同じ値に設定)
+# 4. 画像を分析する際の内部解像度
 ANALYSIS_SIZE = 800
+
+# 5. 解析結果の可視化画像ファイル名
+OUTPUT_ANALYSIS_IMAGE = 'analysis_result.png'
+
+# 6. CSVに出力する座標系の定義
+COORDINATE_MIN = -200.0
+COORDINATE_MAX = 0.0
+
+# 7. 当たり判定のしきい値 (★ 追加)
+#    (例: 0.5 = 50%以上黒ピクセルならヒット)
+#    (例: 0.01 = 1%以上黒ピクセルならヒット)
+#    (0にすると、1ピクセルでもあればヒット ※以前の動作)
+HIT_THRESHOLD_PERCENT = 0.4
 
 # -----------------
 
@@ -62,31 +74,35 @@ def analyze_image_hits(filepath):
     gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # 2. 2値化（白黒に変換）
-    #    Otsuの自動しきい値設定を使用し、紙(白)を 255、墨(黒)を 0 にする
-    #    (cv2.THRESH_BINARY)
     try:
-        _, binary_img = cv2.threshold(gray_img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        _, binary_img_inv = cv2.threshold(gray_img, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+        binary_img = cv2.bitwise_not(binary_img_inv)
     except Exception as e:
-        print(f"エラー: 2値化処理に失敗しました。画像が真っ白または真っ黒である可能性があります。: {e}")
-        # もし画像が真っ黒なら、THRESH_OTSUは失敗することがある
-        # 代替として、平均値をしきい値にする
+        print(f"エラー: 2値化処理(OTSU)に失敗しました。画像が真っ白または真っ黒である可能性があります。: {e}")
         mean_val = np.mean(gray_img)
-        if mean_val < 128: # ほぼ黒い画像
-            _, binary_img = cv2.threshold(gray_img, 1, 255, cv2.THRESH_BINARY) # 0以外を白
-        else: # ほぼ白い画像
-            _, binary_img = cv2.threshold(gray_img, 254, 255, cv2.THRESH_BINARY) # 255以外を黒
+        if mean_val < 128:
+            _, binary_img = cv2.threshold(gray_img, 1, 255, cv2.THRESH_BINARY)
+        else:
+            _, binary_img = cv2.threshold(gray_img, 254, 255, cv2.THRESH_BINARY) 
             
     print("--- 2値化処理 完了 ---")
 
     # 3. 標準サイズにリサイズ
-    #    INTER_NEAREST は、白黒の境界をクッキリ保ったままリサイズする
     resized_img = cv2.resize(binary_img, (ANALYSIS_SIZE, ANALYSIS_SIZE), interpolation=cv2.INTER_NEAREST)
 
-    # 4. グリッドセルごとに当たり判定
+    # (★ 変更) 4. グリッドセルごとに当たり判定
     CELL_SIZE_PX = ANALYSIS_SIZE // GRID_SIZE
-    hit_cells = set() # ヒットしたセルのIDを重複なく格納
+    hit_cells = set() 
 
     print(f"--- {GRID_SIZE}x{GRID_SIZE} グリッド ({GRID_SIZE*GRID_SIZE}セル) の当たり判定を開始... ---")
+    print(f"--- 当たり判定しきい値: {HIT_THRESHOLD_PERCENT * 100:.0f}% ---")
+
+    # (★ 追加) セル内の総ピクセル数を計算
+    total_pixels_in_cell = CELL_SIZE_PX * CELL_SIZE_PX
+    
+    # (★ 追加) ヒット判定に必要な黒ピクセル数を計算
+    # (例: 10000ピクセル * 0.5 = 5000ピクセル)
+    hit_threshold_count = total_pixels_in_cell * HIT_THRESHOLD_PERCENT
 
     for y in range(GRID_SIZE):
         for x in range(GRID_SIZE):
@@ -100,13 +116,21 @@ def analyze_image_hits(filepath):
             
             cell_roi = resized_img[y_start:y_end, x_start:x_end]
             
-            # 当たり判定：
-            # この領域 (cell_roi) に、黒ピクセル (値 = 0) が
-            # 1つでも存在するかどうかをチェックする
+            # (★ 変更) 当たり判定ロジック
+            # 変更前:
+            # if np.min(cell_roi) == 0:
             
-            # np.min() を使うと高速
-            # もしセルの最小値が 0 なら、そのセルには黒が
-            if np.min(cell_roi) == 0:
+            # 変更後:
+            # この領域 (cell_roi) に、黒ピクセル (値 = 0) が
+            # しきい値の割合以上存在するかどうかをチェックする
+
+            # 黒ピクセル(値=0)の数をカウント
+            # (注: np.count_nonzero は 0 以外の数を数えるので、
+            #  (cell_roi == 0) の真偽配列に対して実行する)
+            black_pixel_count = np.count_nonzero(cell_roi == 0)
+            
+            # 黒ピクセル数がしきい値以上ならヒット
+            if black_pixel_count >= hit_threshold_count:
                 hit_cells.add(cell_id)
 
     # 5. 結果をソート
@@ -116,16 +140,63 @@ def analyze_image_hits(filepath):
     print(f"ヒットした「スピーカ」(セル) の総数: {len(sorted_hits)}")
     print(f"ヒットしたセル ID: {sorted_hits}")
 
-    # 6. CSVファイルに保存
+    # 5.5. 解析結果の可視化画像を生成・保存
+    print(f"--- 解析結果の可視化画像を生成中... ---")
     try:
+        debug_img = cv2.cvtColor(resized_img, cv2.COLOR_GRAY2BGR)
+        
+        # グリッド線
+        for i in range(1, GRID_SIZE):
+            pos = i * CELL_SIZE_PX
+            cv2.line(debug_img, (pos, 0), (pos, ANALYSIS_SIZE), (128, 128, 128), 1)
+            cv2.line(debug_img, (0, pos), (ANALYSIS_SIZE, pos), (128, 128, 128), 1)
+
+        # ヒットしたセルに赤枠
+        for cell_id in sorted_hits:
+            grid_x = cell_id % GRID_SIZE
+            grid_y = cell_id // GRID_SIZE
+            
+            x_start = grid_x * CELL_SIZE_PX
+            y_start = grid_y * CELL_SIZE_PX
+            x_end = (grid_x + 1) * CELL_SIZE_PX - 1
+            y_end = (grid_y + 1) * CELL_SIZE_PX - 1
+            
+            cv2.rectangle(debug_img, (x_start, y_start), (x_end, y_end), (0, 0, 255), 2)
+        
+        cv2.imwrite(OUTPUT_ANALYSIS_IMAGE, debug_img)
+        print(f"--- 可視化画像を {OUTPUT_ANALYSIS_IMAGE} に保存しました。 ---")
+    except Exception as e:
+        print(f"エラー: 可視化画像の保存に失敗しました: {e}")
+
+    # 6. 座標変換とCSVファイルへの保存
+    try:
+        analysis_range = float(ANALYSIS_SIZE - 1) 
+        coord_range = COORDINATE_MAX - COORDINATE_MIN 
+
         with open(OUTPUT_CSV_FILE, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['cell_id', 'grid_x', 'grid_y'])
+            writer.writerow(['cell_id', 'grid_x', 'grid_y', 'plotter_x_start', 'plotter_y_start'])
             
             for cell_id in sorted_hits:
                 grid_x = cell_id % GRID_SIZE
                 grid_y = cell_id // GRID_SIZE
-                writer.writerow([cell_id, grid_x, grid_y])
+                
+                pixel_x_start = grid_x * CELL_SIZE_PX
+                pixel_y_start = grid_y * CELL_SIZE_PX
+                
+                # X軸: (0..799) -> (-200..0)
+                plotter_x = (pixel_x_start / analysis_range) * coord_range + COORDINATE_MIN
+                
+                # Y軸: (0..799) -> (0..-200)
+                plotter_y = (pixel_y_start / analysis_range) * (COORDINATE_MIN - COORDINATE_MAX) + COORDINATE_MAX
+                
+                writer.writerow([
+                    cell_id, 
+                    grid_x, 
+                    grid_y, 
+                    f"{plotter_x:.3f}", 
+                    f"{plotter_y:.3f}"
+                ])
         
         print(f"--- 結果を {OUTPUT_CSV_FILE} に保存しました。 ---")
     except Exception as e:
