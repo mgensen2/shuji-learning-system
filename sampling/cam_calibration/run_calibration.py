@@ -3,7 +3,6 @@ import numpy as np
 import glob
 import os
 
-# --- パラメータ設定 (ステップ1と合わせる) ---
 SQUARES_X = 7
 SQUARES_Y = 5
 SQUARE_LENGTH = 0.03
@@ -13,15 +12,17 @@ DICTIONARY_NAME = cv2.aruco.DICT_4X4_100
 # --- ボードの定義 (ステップ1と同一) ---
 dictionary = cv2.aruco.getPredefinedDictionary(DICTIONARY_NAME)
 board = cv2.aruco.CharucoBoard(
-    (SQUARES_X,SQUARES_Y),
+    (SQUARES_X, SQUARES_Y),
     SQUARE_LENGTH,
     MARKER_LENGTH,
     dictionary
 )
 
 # --- 検出パラメータ ---
-params = cv2.aruco.DetectorParameters_create()
+params = cv2.aruco.DetectorParameters()
 
+# --- ★★★ 修正点 1: Detector オブジェクトを作成 ★★★ ---
+detector = cv2.aruco.Detector(dictionary, params)
 # --- 画像の読み込み (ステップ2で保存した場所) ---
 IMG_DIR = "calibration_images"
 images = glob.glob(os.path.join(IMG_DIR, '*.png'))
@@ -50,7 +51,7 @@ for fname in images:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # 1. ArUcoマーカーの検出
-    corners, ids, rejected = cv2.aruco.detectMarkers(gray, dictionary, parameters=params)
+    corners, ids, rejected = detector.detectMarkers(gray)
 
     # 2. ChArUcoコーナーの検出（サブピクセル精度）
     if ids is not None and len(ids) > 0:
