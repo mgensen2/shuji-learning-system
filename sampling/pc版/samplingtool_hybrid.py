@@ -18,7 +18,7 @@ DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
 CORNER_IDS = [0, 1, 2, 3] # [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
 CORNER_INDEX_MAP = { 0: 2, 1: 3, 2: 0, 3: 1 } # マーカーのどの角を基準点にするか (Which corner to use as the reference point)
 
-BRUSH_MARKER_ID = 4
+BRUSH_MARKER_ID = 50 # 筆に取り付けるマーカーのID (ID for the marker attached to the brush)
 
 # エリアロック/オフセット設定の保存ファイル名
 # Filename to save area lock / offset settings
@@ -35,9 +35,9 @@ CAPTURE_IMAGE_FILENAME = 'calligraphy_image.png'
 # MediaPipe Hands の初期化 (Initialization)
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
-hands_top = mp.solutions.hands.Hands(
+hands_top = mp.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
-hands_side = mp.solutions.hands.Hands(
+hands_side = mp.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 # 座標系の設定 (Coordinate system settings)
@@ -64,7 +64,7 @@ M_live = None   # リアルタイムの変換行列 (Live transformation matrix)
 M_locked = None # 固定された変換行列 (Locked transformation matrix)
 TARGET_HAND = "Any"
 TRACKING_MODE = "Hybrid"      # "Hybrid", "MarkerOnly", "MediaPipeOnly"
-RECORDING_MODE = "Time"       # ★ 新規: "Time" (時間) or "Spatial" (空間/セル移動)
+RECORDING_MODE = "Time"       # "Time" (時間) or "Spatial" (空間/セル移動)
 
 # 筆圧キャリブレーション用 (For pressure calibration)
 Y_TOUCH_THRESHOLD = -1     
@@ -168,7 +168,6 @@ def select_tracking_mode():
         else:
             print("無効な入力です。'h', 'm', 'p' のいずれかを入力してください。")
 
-# ★★★ 新規追加 ★★★
 def select_recording_mode():
     """ユーザーに記録モードを選択させる"""
     """Lets user select the recording mode"""
@@ -330,9 +329,19 @@ def get_cell_id(norm_x, norm_y):
 def save_all_data():
     """プログラム終了時にデータをCSVに保存"""
     """Saves data to CSV upon program exit"""
-    print(f"Saving {len(drawing_data)} data points...")
+    global drawing_data, cell_transitions
+    
+    # ★ 'w'キーで保存されてデータが空の場合、何もしない
+    # ★ If data is empty (already saved via 'w'), do nothing
+    if not drawing_data:
+        print("--- 終了処理: 保存すべきデータはありません ---")
+        return
+
+    print(f"--- 終了処理: 残りの {len(drawing_data)} 件のデータを保存します... ---")
     if drawing_data:
         headers = drawing_data[0].keys()
+        # ★ デフォルトのファイル名に保存
+        # ★ Save to default filenames
         with open('unpitsu_data_full.csv', 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
@@ -345,6 +354,74 @@ def save_all_data():
             writer.writeheader()
             writer.writerows(cell_transitions)
         print("Saved unpitsu_data_transitions.csv")
+    
+    # データをクリア
+    drawing_data = []
+    cell_transitions = []
+
+# ★★★ 新規追加 ★★★
+def save_data_with_prompt():
+    """
+    ユーザーにファイル名を入力させ、現在のデータを保存し、内部データをクリアする
+    """
+    """
+    Prompts user for a filename, saves current data, and clears internal data
+    """
+    global drawing_data, cell_transitions, stroke_count
+    
+    if not drawing_data:
+        print("--- 保存するデータがありません ---")
+        return
+    
+    print("\n--- CSV保存 ---")
+    print("!!! OpenCVウィンドウは一時停止します。このコンソールを見てください。!!!")
+    
+    # データをコピー (Copy data)
+    temp_drawing_data = drawing_data.copy()
+    temp_cell_transitions = cell_transitions.copy()
+    
+    # ファイル名を入力させる (Get filename input)
+    filename_base = input("CSVのベース名を入力してください (例: my_writing_session): ").strip()
+    
+    if not filename_base:
+        # デフォルトのファイル名 (Default filename)
+        filename_base = f"unpitsu_data_{int(time.time())}"
+        print(f"名前が入力されなかったので、デフォルト名を使用します: {filename_base}")
+
+    # 保存パスを生成 (Generate save paths)
+    full_csv_path = f"{filename_base}_full.csv"
+    transitions_csv_path = f"{filename_base}_transitions.csv"
+
+    # drawing_data (full) の保存
+    try:
+        headers = temp_drawing_data[0].keys()
+        with open(full_csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(temp_drawing_data)
+        print(f"--- 成功: {full_csv_path} として保存しました。 ({len(temp_drawing_data)} 件)")
+    except Exception as e:
+        print(f"エラー: {full_csv_path} の保存に失敗しました: {e}")
+
+    # cell_transitions の保存
+    if temp_cell_transitions:
+        try:
+            headers = temp_cell_transitions[0].keys()
+            with open(transitions_csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(temp_cell_transitions)
+            print(f"--- 成功: {transitions_csv_path} として保存しました。 ({len(temp_cell_transitions)} 件)")
+        except Exception as e:
+            print(f"エラー: {transitions_csv_path} の保存に失敗しました: {e}")
+
+    # 内部データをリセット (Reset internal data)
+    drawing_data = []
+    cell_transitions = []
+    stroke_count = 0
+    print("--- 内部データをクリアしました。新しい記録を開始できます。 ---")
+    print("\n--- OpenCVウィンドウに戻ります ---")
+
 
 def save_calibration_data():
     """現在のキャリブレーションデータを.npzに保存する"""
@@ -353,14 +430,10 @@ def save_calibration_data():
         print("エラー: エリアがロックされていません。 [l]キーでロックしてください。")
         return
     
-    # MediaPipeOnlyモードの場合は、オフセット調整は不要
-    # If in MediaPipeOnly mode, offset adjustment is not needed
     if TRACKING_MODE == "MediaPipeOnly":
-        offset_to_save = np.array((0.0, 0.0)) # ダミーのオフセット (Dummy offset)
+        offset_to_save = np.array((0.0, 0.0)) 
         print("--- MediaPipeOnlyモード: エリアロックのみ保存します ---")
     else:
-        # Hybrid, MarkerOnly モードの場合はオフセットが必要
-        # Hybrid, MarkerOnly modes require offset
         if not is_brush_calibrated:
             print(f"エラー: 筆オフセットが調整されていません。 [o]キーで調整してください。")
             return
@@ -387,12 +460,8 @@ def load_calibration_data():
                 M_locked = data['M_locked']
                 is_area_locked = True
                 
-                # MediaPipeOnlyモードでなければ、オフセットも読み込む
-                # If not in MediaPipeOnly mode, load offset as well
                 if TRACKING_MODE != "MediaPipeOnly":
                     offset_data = data['BRUSH_TIP_OFFSET_LOCAL']
-                    # .npzから読み込んだ配列が0次元配列(array(tuple))の場合、正しくタプルに変換する
-                    # If the loaded array is 0-dim (array(tuple)), convert it to a tuple correctly
                     if offset_data.shape == ():
                         BRUSH_TIP_OFFSET_LOCAL = tuple(offset_data.item())
                     else:
@@ -401,7 +470,7 @@ def load_calibration_data():
                     print(f"--- キャリブレーションデータを読み込みました ({CALIB_FILE_NAME}) ---")
                     print("  エリアロックと筆オフセットが復元されました。")
                 else:
-                    is_brush_calibrated = False # MediaPipeモードではオフセットは使わない (Offset not used in MediaPipe mode)
+                    is_brush_calibrated = False 
                     print(f"--- キャリブレーションデータを読み込みました ({CALIB_FILE_NAME}) ---")
                     print("  エリアロックが復元されました。(MediaPipeモードのためオフセットは無視)")
         except Exception as e:
@@ -429,14 +498,12 @@ def load_lens_calibration(file_path, frame_size_wh):
                 dist = data['dist']
                 w, h = frame_size_wh
                 
-                # 最適なカメラ行列を取得 (Get optimal camera matrix)
                 new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 1, (w, h))
                 
-                # 高速化のため、remap用のマップを計算 (Calculate remap maps for speed)
                 TOP_CAM_MAP_X, TOP_CAM_MAP_Y = cv2.initUndistortRectifyMap(mtx, dist, None, new_mtx, (w, h), cv2.CV_32FC1)
                 
-                TOP_CAM_MTX = mtx # (参考用に保持) (Hold for reference)
-                TOP_CAM_DIST = dist # (参考用に保持) (Hold for reference)
+                TOP_CAM_MTX = mtx 
+                TOP_CAM_DIST = dist 
                 
                 print(f"--- レンズ歪み補正データを読み込みました ({file_path}) ---")
         except Exception as e:
@@ -445,20 +512,15 @@ def load_lens_calibration(file_path, frame_size_wh):
         print(f"--- レンズ歪み補正ファイルが見つかりません ({file_path}) ---")
         print("    歪み補正なしで続行します。")
 
-# ★★★ 修正 ★★★
 def record_data(event_type, timestamp, pressure, pen_pos_norm):
     """データを整形してリストに追加する"""
     """Formats and adds data to the list"""
     global last_cell_id, last_record_time, stroke_count
 
-    # ★ RECORDING_MODE == "Time" の場合のみ、時間ベースの間引きを行う
-    # ★ Only perform time-based thinning if RECORDING_MODE == "Time"
     if RECORDING_MODE == "Time" and event_type == 'move':
         if timestamp - last_record_time < SAMPLING_INTERVAL:
             return # 間引く (Thin out)
     
-    # 最後に記録した時間（Timeモードの間引き、Spatialモードのタイムスタンプ）として更新
-    # Update as the last recorded time (for Time mode thinning, or Spatial mode timestamp)
     last_record_time = timestamp
 
     (norm_x, norm_y) = pen_pos_norm
@@ -470,21 +532,15 @@ def record_data(event_type, timestamp, pressure, pen_pos_norm):
         'x': f"{x:.2f}", 'y': f"{y:.2f}", 'pressure': f"{pressure:.4f}", 'cell_id': cell_id
     })
     
-    # セル移動の検出 (Detect cell transition)
-    # ★ last_cell_id はグローバル変数としてこの関数が管理する
-    # ★ last_cell_id is managed by this function as a global variable
     if event_type != 'up' and last_cell_id != -1 and cell_id != last_cell_id:
         curr_x, curr_y = cell_id % GRID_SIZE, cell_id // GRID_SIZE
         prev_x, prev_y = last_cell_id % GRID_SIZE, last_cell_id // GRID_SIZE
-        # 隣接セルへの移動のみ (Only adjacent cell movements)
         if abs(curr_x - prev_x) + abs(curr_y - prev_y) == 1:
             cell_transitions.append({
                 'timestamp': timestamp, 'stroke_id': stroke_count,
                 'from_cell': last_cell_id, 'to_cell': cell_id
             })
             
-    # ★ last_cell_id の管理をここで行う (両方のモードで必要)
-    # ★ Manage last_cell_id here (needed for both modes)
     last_cell_id = cell_id if event_type != 'up' else -1
 
 
@@ -512,7 +568,7 @@ TARGET_HAND = select_target_hand()
 # 5.1c. 追跡モードの選択 (Select tracking mode)
 TRACKING_MODE = select_tracking_mode()
 
-# ★★★ 5.1d. 記録モードの選択 (新規追加) ★★★
+# 5.1d. 記録モードの選択 (Select recording mode)
 RECORDING_MODE = select_recording_mode()
 
 # 5.1e. NPZキャリブレーションデータの自動読み込み (Auto-load NPZ calibration data)
@@ -538,14 +594,16 @@ print(" [s] キー: 記録セッションの開始/停止")
 print(" [c] キー: 完成した作品を撮影 (エリアロック後に実行)")
 print(" [p] キー: 記録の手動一時停止/再開 (セッション中のみ)")
 print(" [k] キー: 現在のエリアロックとオフセットを .npz に保存")
+print(" [w] キー: ★ 現在のデータを名前を付けて保存 (記録停止中のみ)")
 print(" [q] キー: 終了してCSV保存")
 
 print("\n★ 推奨手順 (Recommended procedure):")
 if TRACKING_MODE != "MediaPipeOnly":
-    print(" (1) [l] -> (2) [o] -> (3) [s] ... [s] -> (4) [c] -> (5) [q]")
+    print(" (1) [l] -> (2) [o] -> (3) [s] ... [s] -> (4) [w]で保存 -> (5) [s] ...")
 else:
-    print(" (1) [l] -> (2) [s] ... [s] -> (3) [c] -> (4) [q]")
-print("★ 次回起動時: [k] で保存した .npz が自動で読み込まれます。")
+    print(" (1) [l] -> (2) [s] ... [s] -> (3) [w]で保存 -> (4) [s] ...")
+print("★ 撮影は [s]停止中 に [c] で行えます。")
+print("★ 終了は [q] です (保存していないデータは 'unpitsu_data_...' に保存されます)")
 
 
 while True:
@@ -567,18 +625,15 @@ while True:
     if ids_top is not None:
         aruco.drawDetectedMarkers(frame_top, corners_top, ids_top)
 
-    # 4隅のマーカーの基準点を取得 (Get reference points for the 4 corner markers)
     src_pts = [get_marker_point(id, ids_top, corners_top) for id in CORNER_IDS]
     
     if all(pt is not None for pt in src_pts):
         src_pts_np = np.float32(src_pts)
         M_live = cv2.getPerspectiveTransform(src_pts_np, dst_pts) 
-        # ライブのエリア枠を緑で描画 (Draw live area border in green)
         cv2.polylines(frame_top, [src_pts_np.astype(int)], True, (0, 255, 0), 2)
     else:
         M_live = None 
     
-    # 使用する変換行列を決定 (Determine which transformation matrix to use)
     M_to_use = M_locked if is_area_locked else M_live
 
     # 5.5b. 筆マーカーの検出 (Detect brush marker)
@@ -592,11 +647,8 @@ while True:
             if marker_id == BRUSH_MARKER_ID:
                 brush_marker_corners_pixel = corners_top[i][0].astype(int)
                 brush_marker_center_pixel = brush_marker_corners_pixel.mean(axis=0).astype(int)
-                # マーカーのローカルX軸 (corner[1] - corner[0]) (Marker's local X-axis)
                 brush_marker_xaxis_pixel = brush_marker_corners_pixel[1] - brush_marker_corners_pixel[0]
-                # マーカーのローカルY軸 (corner[3] - corner[0]) (Marker's local Y-axis)
                 brush_marker_yaxis_pixel = brush_marker_corners_pixel[3] - brush_marker_corners_pixel[0]
-                # 筆マーカーをシアンで描画 (Draw brush marker in cyan)
                 cv2.polylines(frame_top, [brush_marker_corners_pixel], True, (255, 255, 0), 2)
                 break
 
@@ -613,15 +665,13 @@ while True:
         landmark = hand_landmarks_side.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
         pen_y_side = int(landmark.y * h_side)
         
-        # Y座標と しきい値 を比較して筆圧を0-8で計算
-        # Calculate pressure (0-8) by comparing Y coordinate with thresholds
         if pen_y_side < Y_TOUCH_THRESHOLD:
             is_touching_now = False
             current_pressure_level = 0
         elif pen_y_side >= Y_MAX_PRESS_THRESHOLD:
             is_touching_now = True
             current_pressure_level = 8
-        else: # Y_TOUCH_THRESHOLD <= pen_y_side < Y_MAX_PRESS_THRESHOLD
+        else: 
             is_touching_now = True
             touch_range = float(Y_MAX_PRESS_THRESHOLD - Y_TOUCH_THRESHOLD)
             current_depth = float(pen_y_side - Y_TOUCH_THRESHOLD)
@@ -629,9 +679,8 @@ while True:
                 normalized_pressure = current_depth / touch_range
                 current_pressure_level = int(round(normalized_pressure * 8))
             else:
-                current_pressure_level = 0 # 稀なケース (Rare case)
+                current_pressure_level = 0 
         
-    # Sideカメラのプレビュー描画 (Draw Side camera preview)
     cv2.line(frame_side, (0, Y_TOUCH_THRESHOLD), (w_side, Y_TOUCH_THRESHOLD), (0, 255, 255), 2)
     cv2.putText(frame_side, f"P=0 Y:{Y_TOUCH_THRESHOLD}", (10, Y_TOUCH_THRESHOLD - 10), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
@@ -655,7 +704,6 @@ while True:
     if M_to_use is not None:
         
         # --- [A] MediaPipe（指）の座標を計算 ---
-        # --- [A] Calculate MediaPipe (finger) coordinates ---
         if TRACKING_MODE == "MediaPipeOnly" or TRACKING_MODE == "Hybrid":
             frame_top_rgb = cv2.cvtColor(frame_top, cv2.COLOR_BGR2RGB)
             results_top = hands_top.process(frame_top_rgb)
@@ -665,45 +713,34 @@ while True:
                 h_top, w_top, _ = frame_top.shape
                 landmark_top = hand_landmarks_top.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
                 pen_center_pixel = (int(landmark_top.x * w_top), int(landmark_top.y * h_top))
-                # ピクセル座標を射影変換 (Transform pixel coordinates)
                 pen_pixel_np = np.float32([[pen_center_pixel]])
                 pen_pos_norm_raw = cv2.perspectiveTransform(pen_pixel_np, M_to_use)
                 finger_pos_norm = (pen_pos_norm_raw[0][0][0], pen_pos_norm_raw[0][0][1])
                 cv2.circle(frame_top, tuple(pen_center_pixel), 8, (0, 0, 255), -1) # 指 = 赤 (Finger = Red)
 
         # --- [B] 筆マーカーの座標を計算 ---
-        # --- [B] Calculate brush marker coordinates ---
         if (TRACKING_MODE == "MarkerOnly" or TRACKING_MODE == "Hybrid"):
             if is_brush_calibrated and brush_marker_center_pixel is not None:
                 local_x, local_y = BRUSH_TIP_OFFSET_LOCAL
-                # オフセットを回転・適用 (Apply offset with rotation)
                 tip_vector_pixel = (brush_marker_xaxis_pixel * local_x) + (brush_marker_yaxis_pixel * local_y)
                 pen_tip_pixel = (brush_marker_center_pixel + tip_vector_pixel).astype(int)
-                # ピクセル座標を射影変換 (Transform pixel coordinates)
                 pen_pixel_np = np.float32([[pen_tip_pixel]])
                 pen_pos_norm_raw = cv2.perspectiveTransform(pen_pixel_np, M_to_use)
                 marker_pos_norm = (pen_pos_norm_raw[0][0][0], pen_pos_norm_raw[0][0][1])
                 cv2.circle(frame_top, tuple(pen_tip_pixel), 8, (255, 100, 0), -1) # マーカー = 青 (Marker = Blue)
 
         # --- [C] 最終的な pen_pos_norm を決定 ---
-        # --- [C] Determine the final pen_pos_norm ---
         if TRACKING_MODE == "Hybrid":
-            # [優先] マーカー -> [予備] 指
-            # [Priority] Marker -> [Fallback] Finger
             pen_pos_norm = marker_pos_norm if marker_pos_norm is not None else finger_pos_norm
         elif TRACKING_MODE == "MarkerOnly":
-            # マーカーのみ
             pen_pos_norm = marker_pos_norm
         elif TRACKING_MODE == "MediaPipeOnly":
-            # 指のみ
             pen_pos_norm = finger_pos_norm
 
-        # 最終的に座標が取得できていれば、それを保持する
-        # If coordinates were successfully obtained, hold them
         if pen_pos_norm is not None:
             last_pen_pos_norm = pen_pos_norm
 
-    # ★★★ 5.8. 状態機械 (State Machine) - 記録モード分岐 ★★★
+    # 5.8. 状態機械 (State Machine) - 記録モード分岐
     if is_recording_session and not is_manually_paused and last_pen_pos_norm is not None:
         
         if is_touching_now and not is_pen_down:
@@ -712,34 +749,24 @@ while True:
             stroke_count += 1
             print(f"Stroke {stroke_count} START (Down) - Pressure: {current_pressure_level}")
             record_data('down', current_time, current_pressure_level, last_pen_pos_norm)
-            # (last_cell_id は record_data が更新)
         
         elif is_touching_now and is_pen_down:
             # --- 状態：Pen Move (触れ続けている) ---
             
             if RECORDING_MODE == "Time":
-                # [時間モード] 常に記録を試みる (間引きは record_data が行う)
-                # [Time Mode] Always attempt to record (thinning handled by record_data)
                 record_data('move', current_time, current_pressure_level, last_pen_pos_norm)
             
             elif RECORDING_MODE == "Spatial":
-                # [空間モード] セルが移動した時だけ記録する
-                # [Spatial Mode] Record only when the cell changes
                 (norm_x, norm_y) = last_pen_pos_norm
                 current_cell_id = get_cell_id(norm_x, norm_y)
-                
-                # last_cell_id は record_data が管理するグローバル変数
-                # last_cell_id is a global variable managed by record_data
                 if current_cell_id != last_cell_id:
                     record_data('move', current_time, current_pressure_level, last_pen_pos_norm)
-                    # (last_cell_id の更新は record_data が行う)
             
         elif not is_touching_now and is_pen_down:
             # --- 状態：Pen Up (離れた瞬間) ---
             is_pen_down = False
             print(f"Stroke {stroke_count} END (Up)")
             record_data('up', current_time, 0, last_pen_pos_norm)
-            # (last_cell_id は record_data が -1 にリセット)
 
     # 5.9. 画面表示 (Screen display)
     status_text = "RECORDING" if is_recording_session else "STOPPED"
@@ -752,15 +779,12 @@ while True:
         status_text = "AREA NOT FOUND"
         color = (100, 100, 100)
     
-    # モードと手の情報を表示 (Display mode and hand info)
     cv2.putText(frame_top, f"STATUS: {status_text}", (20, 40), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-    # ★ 記録モードも表示
     cv2.putText(frame_top, f"T-MODE: {TRACKING_MODE} (Hand: {TARGET_HAND})", (20, 80), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
     cv2.putText(frame_top, f"R-MODE: {RECORDING_MODE}", (20, 110),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-
 
     if is_area_locked:
         area_status_text = "AREA LOCKED"
@@ -768,14 +792,13 @@ while True:
     else:
         area_status_text = "AREA UNLOCKED"
         area_color = (0, 165, 255) # オレンジ (Orange)
-    cv2.putText(frame_top, area_status_text, (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, area_color, 2) # Y位置調整
+    cv2.putText(frame_top, area_status_text, (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, area_color, 2) 
 
-    # オフセット調整の警告 (Offset calibration warning)
     if is_area_locked and not is_brush_calibrated and (TRACKING_MODE != "MediaPipeOnly"): 
-        cv2.putText(frame_top, "CALIBRATE BRUSH OFFSET (Press 'o')", (20, 190), # Y位置調整
+        cv2.putText(frame_top, "CALIBRATE BRUSH OFFSET (Press 'o')", (20, 190), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
     elif not is_area_locked and M_live is None:
-         cv2.putText(frame_top, "Find Area Markers (0,1,2,3) to Lock", (20, 190), # Y位置調整
+         cv2.putText(frame_top, "Find Area Markers (0,1,2,3) to Lock", (20, 190), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2)
 
 
@@ -788,11 +811,9 @@ while True:
         break
 
     if key == ord('k'):
-        # キャリブレーションデータを保存 (Save calibration data)
         save_calibration_data()
 
     if key == ord('p'): 
-        # 記録の手動一時停止 (Manual pause recording)
         if is_recording_session: 
             is_manually_paused = not is_manually_paused
             if is_manually_paused:
@@ -800,13 +821,20 @@ while True:
             else:
                 print("--- 記録を再開 ---")
 
+    # ★★★ 'w' キーの処理 (新規追加) ★★★
+    if key == ord('w'):
+        if is_recording_session:
+            print("エラー: 's'キーで記録を停止してから保存してください。")
+        else:
+            # 映像を一時停止し、コンソールで名前を入力させて保存する
+            # This pauses the video feed to prompt for a name in the console
+            save_data_with_prompt()
+
     if key == ord('l'):
-        # エリアのロック/アンロック (Lock/Unlock area)
         if is_recording_session:
             print("エラー: 記録セッション中はエリアロックを変更できません。")
         else:
             if not is_area_locked:
-                # これからロックする (Locking now)
                 if M_live is not None:
                     M_locked = M_live
                     is_area_locked = True
@@ -818,14 +846,12 @@ while True:
                 else:
                     print("エラー: 4隅のマーカーが認識されていません。ロックできません。")
             else:
-                # ロックを解除する (Unlocking)
                 M_locked = None
                 is_area_locked = False
-                is_brush_calibrated = False # エリアが変わったらオフセットもリセット (Reset offset if area changes)
+                is_brush_calibrated = False 
                 print("--- エリアのロックを解除しました (筆オフセットもリセットされました) ---")
 
     if key == ord('o'):
-        # 筆オフセット調整 (Calibrate brush offset)
         if TRACKING_MODE == "MediaPipeOnly":
             print("--- MediaPipeOnlyモードでは、筆オフセット調整 [o] は不要です。 ---")
             continue
@@ -838,27 +864,17 @@ while True:
             print("エラー: エリアがロックされていません。")
         elif brush_marker_center_pixel is None:
             print(f"エラー: 筆マーカー (ID={BRUSH_MARKER_ID}) が認識できません。")
-        elif src_pts[0] is None: # ID=0 マーカー (ID=0 marker)
+        elif src_pts[0] is None: 
             print("エラー: 左上マーカー (ID=0) が認識できません。")
         else:
-            # --- オフセット計算を実行 ---
-            # --- Execute offset calculation ---
-            # ターゲット = ID=0 の「右下の角」ピクセル座標
-            # Target = Pixel coordinates of the "bottom-right corner" of ID=0
             target_pos_pixel = src_pts[0].astype(int)
-            
-            # マーカー中心からターゲットへのベクトル (Vector from marker center to target)
             tip_vector_pixel = target_pos_pixel - brush_marker_center_pixel
-            
-            # マーカーのローカルX/Y軸の長さの2乗 (Squared length of marker's local X/Y axes)
             norm_x_sq = np.linalg.norm(brush_marker_xaxis_pixel)**2
             norm_y_sq = np.linalg.norm(brush_marker_yaxis_pixel)**2
 
             if norm_x_sq == 0 or norm_y_sq == 0:
                 print("エラー: 筆マーカーが歪んでいます。")
             else:
-                # tip_vector_pixel をマーカーのローカルX軸、Y軸に射影する
-                # Project tip_vector_pixel onto the marker's local X and Y axes
                 local_x = np.dot(tip_vector_pixel, brush_marker_xaxis_pixel) / norm_x_sq
                 local_y = np.dot(tip_vector_pixel, brush_marker_yaxis_pixel) / norm_y_sq
                 
@@ -872,21 +888,14 @@ while True:
                 print("★ [s] キーで記録を開始できます。")
 
     if key == ord('c'):
-        # 作品画像を撮影 (Capture work image)
         if is_recording_session:
             print("エラー: 撮影は記録セッションを停止（[s]キー）してから行ってください。")
         elif not is_area_locked or M_locked is None:
             print("エラー: 撮影するには、まず [l] キーでエリアをロックしてください。")
         else:
-            # 撮影実行 (Execute capture)
             print("--- 作品画像を撮影します... ---")
-            
             frame_to_capture = frame_top.copy() 
-            
-            # 射影変換 (切り抜きと補正) (Perspective transform - crop and correct)
             warped_image = cv2.warpPerspective(frame_to_capture, M_locked, (WARPED_SIZE, WARPED_SIZE))
-            
-            # ファイルに保存 (Save to file)
             output_filename = CAPTURE_IMAGE_FILENAME # 'calligraphy_image.png'
             try:
                 cv2.imwrite(output_filename, warped_image)
@@ -896,21 +905,15 @@ while True:
                 print(f"エラー: 画像の保存に失敗しました: {e}")
 
     if key == ord('s'):
-        # 記録セッションの開始/停止 (Start/Stop recording session)
         if not is_recording_session:
-            # 記録開始の条件チェック (Check conditions to start recording)
             if not is_area_locked:
                 print("エラー: 'l'キーでエリアをロックしてください。")
-            # MediaPipeモード以外は、オフセット調整もチェック
-            # Unless in MediaPipe mode, also check offset calibration
             elif not is_brush_calibrated and (TRACKING_MODE != "MediaPipeOnly"):
                 print("エラー: 'o'キーで筆のオフセット調整を先に行ってください。")
             else:
-                # 記録開始 (Start recording)
                 is_recording_session = True
                 print("--- 記録セッション開始 ---")
         else:
-            # 記録停止 (Stop recording)
             is_recording_session = False
             is_pen_down = False 
             is_manually_paused = False 
