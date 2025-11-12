@@ -26,7 +26,7 @@ CALIB_FILE_NAME = 'unpitsu_calibration.npz'
 
 # Topカメラのレンズ歪み補正ファイル
 # Top camera lens distortion correction file
-LENS_CALIB_FILE_NAME = 'top_camera_lens.npz' 
+LENS_CALIB_FILE_NAME = 'camera_calibration.npz' 
 
 # analyze_calligraphy.py と連携するためのファイル名
 # Filename to link with analyze_calligraphy.py
@@ -224,7 +224,7 @@ def calibrate_pressure_range(cap_side, target_hand_label):
         h, w, _ = frame.shape
         hand_landmarks = get_target_hand_landmarks(results, target_hand_label) 
         if hand_landmarks:
-            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
+            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP] 
             current_y = int(landmark.y * h)
             current_x = int(landmark.x * w)
             cv2.putText(frame, f"Detected Y: {current_y}", (current_x + 10, current_y), 
@@ -259,7 +259,7 @@ def calibrate_pressure_range(cap_side, target_hand_label):
         h, w, _ = frame.shape
         hand_landmarks = get_target_hand_landmarks(results, target_hand_label) 
         if hand_landmarks:
-            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
+            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP] 
             current_y = int(landmark.y * h)
             current_x = int(landmark.x * w)
             cv2.putText(frame, f"Detected Y: {current_y}", (current_x + 10, current_y), 
@@ -490,12 +490,12 @@ def load_lens_calibration(file_path, frame_size_wh):
     if os.path.exists(file_path):
         try:
             with np.load(file_path) as data:
-                if 'mtx' not in data or 'dist' not in data:
+                if 'cameraMatrix' not in data or 'distCoeffs' not in data:
                     print(f"エラー: {file_path} に 'mtx' または 'dist' が含まれていません。")
                     return
                 
-                mtx = data['mtx']
-                dist = data['dist']
+                mtx = data['cameraMatrix']
+                dist = data['distCoeffs']
                 w, h = frame_size_wh
                 
                 new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 1, (w, h))
@@ -662,7 +662,7 @@ while True:
     pen_y_side = -1 
     if hand_landmarks_side: 
         h_side, w_side, _ = frame_side.shape
-        landmark = hand_landmarks_side.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
+        landmark = hand_landmarks_side.landmark[mp_hands.HandLandmark.THUMB_TIP] 
         pen_y_side = int(landmark.y * h_side)
         
         if pen_y_side < Y_TOUCH_THRESHOLD:
@@ -689,7 +689,7 @@ while True:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
     
     if pen_y_side != -1 and hand_landmarks_side: 
-        px_side = int(hand_landmarks_side.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x * w_side) 
+        px_side = int(hand_landmarks_side.landmark[mp_hands.HandLandmark.THUMB_TIP].x * w_side) 
         color = (0, 0, 255) if is_touching_now else (0, 255, 0)
         cv2.circle(frame_side, (px_side, pen_y_side), 8, color, -1)
         cv2.putText(frame_side, f"Pressure: {current_pressure_level}", (px_side + 10, pen_y_side), 
@@ -711,7 +711,7 @@ while True:
             
             if hand_landmarks_top: 
                 h_top, w_top, _ = frame_top.shape
-                landmark_top = hand_landmarks_top.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP] 
+                landmark_top = hand_landmarks_top.landmark[mp_hands.HandLandmark.THUMB_TIP] 
                 pen_center_pixel = (int(landmark_top.x * w_top), int(landmark_top.y * h_top))
                 pen_pixel_np = np.float32([[pen_center_pixel]])
                 pen_pos_norm_raw = cv2.perspectiveTransform(pen_pixel_np, M_to_use)

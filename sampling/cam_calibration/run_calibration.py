@@ -1,7 +1,17 @@
 import cv2
+import cv2.aruco as aruco
 import numpy as np
 import glob
 import os
+
+# --- ▼▼▼ デバッグコードを追加 ▼▼▼ ---
+print("--- OpenCV デバッグ情報 ---")
+print(f"CV2 Version: {cv2.__version__}")
+print(f"CV2 Path: {cv2.__file__}")
+print(f"CV2 Aruco Module: {cv2.aruco}")
+print(f"cv2.aruco に 'Detector' は存在するか？ -> {hasattr(cv2.aruco, 'Detector')}")
+print("--------------------------")
+# --- ▲▲▲ デバッグコードここまで ▲▲▲ ---
 
 SQUARES_X = 7
 SQUARES_Y = 5
@@ -22,7 +32,7 @@ board = cv2.aruco.CharucoBoard(
 params = cv2.aruco.DetectorParameters()
 
 # --- ★★★ 修正点 1: Detector オブジェクトを作成 ★★★ ---
-detector = cv2.aruco.Detector(dictionary, params)
+detector = aruco.ArucoDetector(dictionary, params)
 # --- 画像の読み込み (ステップ2で保存した場所) ---
 IMG_DIR = "calibration_images"
 images = glob.glob(os.path.join(IMG_DIR, '*.png'))
