@@ -18,7 +18,7 @@ DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
 CORNER_IDS = [0, 1, 2, 3] # [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
 CORNER_INDEX_MAP = { 0: 2, 1: 3, 2: 0, 3: 1 } # マーカーのどの角を基準点にするか (Which corner to use as the reference point)
 
-BRUSH_MARKER_ID = 50 # 筆に取り付けるマーカーのID (ID for the marker attached to the brush)
+BRUSH_MARKER_ID = 4 # 筆に取り付けるマーカーのID (ID for the marker attached to the brush)
 
 # エリアロック/オフセット設定の保存ファイル名
 # Filename to save area lock / offset settings
@@ -35,9 +35,9 @@ CAPTURE_IMAGE_FILENAME = 'calligraphy_image.png'
 # MediaPipe Hands の初期化 (Initialization)
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
-hands_top = mp.hands.Hands(
+hands_top = mp.solutions.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
-hands_side = mp.hands.Hands(
+hands_side = mp.solutions.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 # 座標系の設定 (Coordinate system settings)
