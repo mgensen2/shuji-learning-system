@@ -25,9 +25,9 @@ CAPTURE_IMAGE_FILENAME = 'calligraphy_image.png'
 
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
-hands_top = mp.hands.Hands(
+hands_top = mp.solutions.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
-hands_side = mp.hands.Hands(
+hands_side = mp.solutions.hands.Hands(
     max_num_hands=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 COORD_LIMIT = 200.0
@@ -36,9 +36,8 @@ SAMPLING_INTERVAL = 0.05
 WARPED_SIZE = 800       
 CELL_SIZE_PX = WARPED_SIZE / GRID_SIZE
 
-# ★★★ 新規追加：画像補正設定 ★★★
-IMAGE_CORRECTION_INTERVAL = 0.5 # 画像処理による軌跡補正の間隔 (秒)
-IMAGE_CORRECTION_THRESHOLD = 100 # 墨として検出する2値化のしきい値 (0-255, 低いほど濃い黒)
+IMAGE_CORRECTION_INTERVAL = 0.5 
+IMAGE_CORRECTION_THRESHOLD = 100 
 
 # --- 2. データ格納リスト (Data storage lists) ---
 drawing_data = []     
@@ -55,29 +54,28 @@ last_record_time = 0
 last_pen_pos_norm = None 
 M_live = None                 
 M_locked = None               
-M_side_live = None            
-M_side_locked = None          
+# ★ Sideカメラの平面ロック用変数を削除
+# M_side_live = None            
+# M_side_locked = None          
 TARGET_HAND = "Any"
-TRACKING_MODE = "MediaPipeOnly" # ★ MediaPipeOnly に固定
+TRACKING_MODE = "MediaPipeOnly" 
 RECORDING_MODE = "Time"       
 
-Z_TOUCH_HEIGHT = -1     
-Z_PRESS_MAX_HEIGHT = -1 
-is_z_calibrated = False 
+# ★★★ 筆圧キャリブレーション用の変数を元に戻す ★★★
+Y_TOUCH_THRESHOLD = -1     # 筆圧0 (軽くタッチ) の「ピクセルY座標」
+Y_MAX_PRESS_THRESHOLD = -1 # 筆圧8 (強く押す) の「ピクセルY座標」
+# is_z_calibrated は不要になった
 
-# ★ MediaPipeOnlyモードなので、筆オフセットは常に不要 (is_brush_calibrated = True 扱い)
 BRUSH_TIP_OFFSET_LOCAL = None 
-is_brush_calibrated = True # ★ MediaPipeOnlyモードでは自動的に True 扱い
+is_brush_calibrated = True # MediaPipeOnlyモードでは自動的に True
 
 TOP_CAM_MTX = None
 TOP_CAM_DIST = None
 TOP_CAM_MAP_X = None
 TOP_CAM_MAP_Y = None
 
-# ★★★ 新規追加：画像補正用の状態変数 ★★★
-last_image_proc_time = 0    # 最後に画像処理を実行した時間
-last_binary_image = None    # 最後に処理した2値化画像 (基準)
-# ★ 5.8 (move) が参照するための、マスク適用済みの最新2値化画像
+last_image_proc_time = 0    
+last_binary_image = None    
 last_binary_image_masked = None 
 
 
@@ -144,8 +142,6 @@ def select_target_hand():
         else:
             print("無効な入力です。'l', 'r', 'a' のいずれかを入力してください。")
 
-# ★★★ 削除: select_tracking_mode() は不要になったため削除 ★★★
-
 def select_recording_mode():
     """ユーザーに記録モードを選択させる"""
     print("\n--- 記録モードを選択 ---")
@@ -182,6 +178,94 @@ def get_target_hand_landmarks(results, target_hand_label):
             return results.multi_hand_landmarks[i] 
     
     return None 
+
+# ★★★ 復活：calibrate_pressure_range 関数 (旧方式) ★★★
+# ★ (ただし、THUMB_TIP を使うように修正済み) ★
+def calibrate_pressure_range(cap_side, target_hand_label): 
+    """Side-Viewカメラの筆圧(Z軸)キャリブレーションを2段階で行う"""
+    global Y_TOUCH_THRESHOLD, Y_MAX_PRESS_THRESHOLD
+    
+    # --- (1/2) 筆圧 0 (タッチ) のキャリブレーション ---
+    print("--- 筆圧 (Z軸) キャリブレーション (1/2) ---")
+    print("筆（親指の先端）を紙に「軽く触れさせた」状態で 'c' キーを押してください。 (筆圧 0)")
+    current_y = -1
+    while True:
+        ret, frame = cap_side.read()
+        if not ret: return False
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands_side.process(frame_rgb)
+        h, w, _ = frame.shape
+        hand_landmarks = get_target_hand_landmarks(results, target_hand_label) 
+        if hand_landmarks:
+            # ★ 親指の先端 (THUMB_TIP) を使用
+            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP] 
+            current_y = int(landmark.y * h)
+            current_x = int(landmark.x * w)
+            cv2.putText(frame, f"Detected Y: {current_y}", (current_x + 10, current_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.circle(frame, (current_x, current_y), 5, (0, 0, 255), -1)
+        cv2.rectangle(frame, (0, 0), (w, 40), (0,0,0), -1)
+        cv2.putText(frame, "Touch pen to paper (Pressure 0), then press 'c'", (10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.imshow("Side Camera Calibration", frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('c'):
+            if current_y != -1:
+                Y_TOUCH_THRESHOLD = current_y
+                print(f"キャリブレーション (1/2) 完了。タッチしきい値(Y座標) = {Y_TOUCH_THRESHOLD}")
+                break 
+            else:
+                print("エラー: 手が検出されていません。 'c' を押す前に手を映してください。")
+        if key == ord('q'):
+            print("キャリブレーションがキャンセルされました。")
+            cv2.destroyAllWindows()
+            return False
+            
+    # --- (2/2) 筆圧 8 (最大) のキャリブレーション ---
+    print("\n--- 筆圧 (Z軸) キャリブレーション (2/2) ---")
+    print("筆（親指の先端）を紙に「強く押し付けた」状態で 'm' キーを押してください。 (筆圧 8)")
+    current_y = -1
+    while True:
+        ret, frame = cap_side.read()
+        if not ret: return False
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands_side.process(frame_rgb)
+        h, w, _ = frame.shape
+        hand_landmarks = get_target_hand_landmarks(results, target_hand_label) 
+        if hand_landmarks:
+            # ★ 親指の先端 (THUMB_TIP) を使用
+            landmark = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP] 
+            current_y = int(landmark.y * h)
+            current_x = int(landmark.x * w)
+            cv2.putText(frame, f"Detected Y: {current_y}", (current_x + 10, current_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.circle(frame, (current_x, current_y), 5, (0, 0, 255), -1)
+        cv2.line(frame, (0, Y_TOUCH_THRESHOLD), (w, Y_TOUCH_THRESHOLD), (0, 255, 255), 2)
+        cv2.putText(frame, f"TOUCH_Y_LEVEL (Pressure 0): {Y_TOUCH_THRESHOLD}", (10, Y_TOUCH_THRESHOLD - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.rectangle(frame, (0, 0), (w, 40), (0,0,0), -1)
+        cv2.putText(frame, "Press firmly (Pressure 8), then press 'm'", (10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.imshow("Side Camera Calibration", frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('m'):
+            if current_y != -1:
+                if current_y > Y_TOUCH_THRESHOLD: 
+                    Y_MAX_PRESS_THRESHOLD = current_y
+                    print(f"キャリブレーション (2/2) 完了。最大筆圧しきい値(Y座標) = {Y_MAX_PRESS_THRESHOLD}")
+                    cv2.destroyAllWindows()
+                    return True 
+                else:
+                    print(f"エラー: 最大筆圧({current_y})は、タッチしきい値({Y_TOUCH_THRESHOLD})より大きくする必要があります。")
+            else:
+                print("エラー: 手が検出されていません。 'm' を押す前に手を映してください。")
+        if key == ord('q'):
+            print("キャリブレーションがキャンセルされました。")
+            cv2.destroyAllWindows()
+            return False
+            
+    return False
+
 
 def get_marker_point(target_id, detected_ids, detected_corners):
     """
@@ -293,61 +377,54 @@ def save_data_with_prompt():
     print("\n--- OpenCVウィンドウに戻ります ---")
 
 
+# ★★★ 修正: save_calibration_data (Sideカメラの情報を削除) ★★★
 def save_calibration_data():
     """現在のキャリブレーションデータを.npzに保存する"""
-    global is_z_calibrated
-    
     if not is_area_locked:
         print("エラー: エリアがロックされていません。 [l]キーでロックしてください。")
         return
 
-    is_z_calibrated = (Z_TOUCH_HEIGHT != -1 and Z_PRESS_MAX_HEIGHT != -1)
-    if not is_z_calibrated:
-         print("エラー: 筆圧が調整されていません。 [z]キーと[m]キーで調整してください。")
-         return
+    # ★ 筆圧キャリブレーションはピクセルベースなので保存しない
+    # ★ (カメラの位置が変わると無効になるため)
          
-    offset_to_save = np.array((0.0, 0.0)) 
+    offset_to_save = np.array((0.0, 0.0)) # MediaPipeOnlyモードなのでオフセットはダミー
 
     try:
         np.savez(CALIB_FILE_NAME,
                  M_locked=M_locked,
-                 M_side_locked=M_side_locked,
-                 BRUSH_TIP_OFFSET_LOCAL=offset_to_save, 
-                 Z_TOUCH_HEIGHT=np.array(Z_TOUCH_HEIGHT),
-                 Z_PRESS_MAX_HEIGHT=np.array(Z_PRESS_MAX_HEIGHT)
+                 # M_side_locked は削除
+                 BRUSH_TIP_OFFSET_LOCAL=offset_to_save
+                 # Z_..._HEIGHT は削除
                 )
         print(f"--- キャリブレーションデータを保存しました ({CALIB_FILE_NAME}) ---")
-        print("  (Top/Sideエリアロック, 筆圧設定)")
+        print("  (Topエリアロックのみ)")
     except Exception as e:
         print(f"エラー: キャリブレーションデータの保存に失敗しました: {e}")
 
+# ★★★ 修正: load_calibration_data (Sideカメラの情報を削除) ★★★
 def load_calibration_data():
     """起動時にキャリブレーションデータを読み込む"""
-    global M_locked, M_side_locked, BRUSH_TIP_OFFSET_LOCAL, is_area_locked, is_brush_calibrated
-    global Z_TOUCH_HEIGHT, Z_PRESS_MAX_HEIGHT, is_z_calibrated
+    global M_locked, is_area_locked, is_brush_calibrated
     
     if os.path.exists(CALIB_FILE_NAME):
         try:
             with np.load(CALIB_FILE_NAME) as data:
                 M_locked = data['M_locked']
-                M_side_locked = data['M_side_locked']
+                # M_side_locked の読み込みを削除
                 is_area_locked = True
                 
-                Z_TOUCH_HEIGHT = data['Z_TOUCH_HEIGHT'].item()
-                Z_PRESS_MAX_HEIGHT = data['Z_PRESS_MAX_HEIGHT'].item()
-                is_z_calibrated = (Z_TOUCH_HEIGHT != -1 and Z_PRESS_MAX_HEIGHT != -1)
+                # Z_..._HEIGHT の読み込みを削除
+                # is_z_calibrated = False # 常に未実施状態
 
                 print(f"--- キャリブレーションデータを読み込みました ({CALIB_FILE_NAME}) ---")
-                print("  Top/Sideエリアロック、筆圧設定を復元しました。")
+                print("  Topエリアロックを復元しました。")
 
-                is_brush_calibrated = True 
-
+                is_brush_calibrated = True # MediaPipeOnlyモードのためTrue
+                print("  (MediaPipeモードのためオフセットは無視)")
         except Exception as e:
             print(f"エラー: キャリブレーションデータの読み込みに失敗しました: {e}")
             M_locked = None
-            M_side_locked = None
             is_area_locked = False
-            is_z_calibrated = False
     else:
         print(f"--- キャリブレーションファイルが見つかりません ({CALIB_FILE_NAME}) ---")
 
@@ -420,7 +497,6 @@ def get_warped_binary_image(frame, matrix, threshold):
     
     warped_img = cv2.warpPerspective(frame, matrix, (WARPED_SIZE, WARPED_SIZE))
     gray_img = cv2.cvtColor(warped_img, cv2.COLOR_BGR2GRAY)
-    # 墨(暗)を255(白)、紙(明)を0(黒)にする
     _, binary_img = cv2.threshold(gray_img, threshold, 255, cv2.THRESH_BINARY_INV)
     
     return binary_img
@@ -495,30 +571,35 @@ load_calibration_data()
 # 5.1f. NPZレンズ歪み補正データの自動読み込み (Auto-load NPZ lens correction data)
 load_lens_calibration(LENS_CALIB_FILE_NAME, (top_w, top_h))
 
+# ★★★ 5.2. Sideカメラのキャリブレーション (旧方式) を呼び出し ★★★
+if not calibrate_pressure_range(cap_side, TARGET_HAND):
+    sys.exit("キャリブレーションがキャンセルされました。")
+
 # 5.3. メインループの準備 (Prepare for main loop)
 dst_pts = np.float32([[0, 0], [WARPED_SIZE, 0], [WARPED_SIZE, WARPED_SIZE], [0, WARPED_SIZE]])
 print("\n--- トラッキング開始 (Tracking Start) ---")
 print(f"★ 追跡モード: {TRACKING_MODE} (画像補正ON) | 記録モード: {RECORDING_MODE} ★")
-print(" [l] キー: エリア/平面ロック (Top/Sideカメラ両方でマーカー(0-3)を検出)")
+print(" [l] キー: 記録エリアのロック / アンロック")
 print(" [o] キー: (MediaPipeモードでは不要です)")
-print(" [z] キー: ★ 筆圧 0 (タッチ) の設定 (エリアロック後に実行)")
-print(" [m] キー: ★ 筆圧 8 (最大) の設定 (エリアロック後に実行)")
-print(" [s] キー: 記録セッションの開始/停止 (全キャリブレーション後に実行)")
-print(" [c] キー: 完成した作品を撮影 (エリアロック後に実行)")
+print(" [c] キー: ★ 筆圧 0 (タッチ) の設定 (旧方式)")
+print(" [m] キー: ★ 筆圧 8 (最大) の設定 (旧方式)")
+print(" [s] キー: 記録セッションの開始/停止 (エリアロック＆筆圧調整後に実行)")
+# print(" [c] キー: 完成した作品を撮影 (エリアロック後に実行)") # 'c'キーはキャリブレーションで使用
+print(" [v] キー: ★ 完成した作品を撮影 (エリアロック後に実行)") # ★ 'v'キーに変更
 print(" [p] キー: 記録の手動一時停止/再開 (セッション中のみ)")
-print(" [k] キー: 現在の全キャリブレーションを .npz に保存")
+print(" [k] キー: 現在のエリアロックを .npz に保存")
 print(" [w] キー: 現在のデータを名前を付けて保存 (記録停止中のみ)")
 print(" [q] キー: 終了してCSV保存")
 
 print("\n★ 推奨手順 (Recommended procedure):")
-print(" (1) [l] -> (2) [z] -> (3) [m] -> (4) [s] ...")
+print(" (1) [c] -> (2) [m] -> (3) [l] -> (4) [s] ...") # ★ c/m を l の前(起動直後)に実行
 print("★ 終了時: [s] -> [w]で保存 -> [q]")
 
 
 while True:
     # 5.4. 両方のカメラからフレームを取得 (Get frames from both cameras)
     ret_top, frame_top_raw = cap_top.read() 
-    ret_side, frame_side = cap_side.read()
+    ret_side, frame_side_raw = cap_side.read() # ★ 生フレーム
     if not ret_top or not ret_side:
         print("エラー: カメラフレームを読み込めません")
         break
@@ -527,6 +608,9 @@ while True:
         frame_top = cv2.remap(frame_top_raw, TOP_CAM_MAP_X, TOP_CAM_MAP_Y, cv2.INTER_LINEAR)
     else:
         frame_top = frame_top_raw 
+    
+    # ★ Sideカメラのフレームは生フレームをそのまま使う
+    frame_side = frame_side_raw
     
     current_time = time.time()
     
@@ -551,73 +635,58 @@ while True:
     results_top = hands_top.process(frame_top_rgb)
     hand_landmarks_top = get_target_hand_landmarks(results_top, TARGET_HAND) 
 
-    # 5.6. Sideカメラの処理 (筆圧Z軸の検出)
+    # ★★★ 5.6. Sideカメラの処理 (筆圧Z軸の検出) - 旧方式 ★★★
     is_touching_now = False 
     current_pressure_level = 0 
-    pen_y_side_warped = -1 
     
-    (corners_side, ids_side, _) = DETECTOR.detectMarkers(frame_side)
-    if ids_side is not None:
-        aruco.drawDetectedMarkers(frame_side, corners_side, ids_side)
+    # ★ 生フレーム (frame_side) に対して処理
+    frame_side_rgb = cv2.cvtColor(frame_side, cv2.COLOR_BGR2RGB)
+    results_side = hands_side.process(frame_side_rgb)
+    hand_landmarks_side = get_target_hand_landmarks(results_side, TARGET_HAND)
     
-    src_pts_side = [get_marker_point(id, ids_side, corners_side) for id in CORNER_IDS]
-    
-    if all(pt is not None for pt in src_pts_side):
-        src_pts_side_np = np.float32(src_pts_side)
-        M_side_live = cv2.getPerspectiveTransform(src_pts_side_np, dst_pts) 
-        cv2.polylines(frame_side, [src_pts_side_np.astype(int)], True, (0, 255, 0), 2)
-    else:
-        M_side_live = None
-
-    M_side_to_use = M_side_locked if is_area_locked else M_side_live
-    
-    frame_side_display = frame_side 
-
-    if M_side_to_use is not None:
-        frame_side_warped = cv2.warpPerspective(frame_side, M_side_to_use, (WARPED_SIZE, WARPED_SIZE))
-        frame_side_display = frame_side_warped 
+    pen_y_side = -1 
+    if hand_landmarks_side: 
+        h_side, w_side, _ = frame_side.shape
+        # ★ 親指の先端 (THUMB_TIP) を使用
+        landmark = hand_landmarks_side.landmark[mp_hands.HandLandmark.THUMB_TIP] 
+        pen_y_side = int(landmark.y * h_side) # ★ 生のピクセルY座標
         
-        frame_side_warped_rgb = cv2.cvtColor(frame_side_warped, cv2.COLOR_BGR2RGB)
-        results_side_warped = hands_side.process(frame_side_warped_rgb)
-        hand_landmarks_side = get_target_hand_landmarks(results_side_warped, TARGET_HAND)
+        # ★ 旧方式の筆圧計算
+        is_pressure_calibrated = (Y_TOUCH_THRESHOLD != -1 and Y_MAX_PRESS_THRESHOLD != -1)
+        if is_pressure_calibrated: 
+            if pen_y_side < Y_TOUCH_THRESHOLD:
+                is_touching_now = False
+                current_pressure_level = 0
+            elif pen_y_side >= Y_MAX_PRESS_THRESHOLD:
+                is_touching_now = True
+                current_pressure_level = 8
+            else: 
+                is_touching_now = True
+                touch_range = float(Y_MAX_PRESS_THRESHOLD - Y_TOUCH_THRESHOLD)
+                current_depth = float(pen_y_side - Y_TOUCH_THRESHOLD)
+                if touch_range > 0: 
+                    normalized_pressure = current_depth / touch_range
+                    current_pressure_level = int(round(normalized_pressure * 8))
+                else:
+                    current_pressure_level = 0 
         
-        if hand_landmarks_side:
-            h_side_w, w_side_w, _ = frame_side_warped.shape 
-            
-            landmark = hand_landmarks_side.landmark[mp_hands.HandLandmark.THUMB_TIP] 
-            
-            pen_y_side_warped = int(landmark.y * h_side_w) 
-            
-            if is_z_calibrated: 
-                if pen_y_side_warped < Z_TOUCH_HEIGHT:
-                    is_touching_now = False
-                    current_pressure_level = 0
-                elif pen_y_side_warped >= Z_PRESS_MAX_HEIGHT:
-                    is_touching_now = True
-                    current_pressure_level = 8
-                else: 
-                    is_touching_now = True
-                    touch_range = float(Z_PRESS_MAX_HEIGHT - Z_TOUCH_HEIGHT)
-                    current_depth = float(pen_y_side_warped - Z_TOUCH_HEIGHT)
-                    if touch_range > 0: 
-                        normalized_pressure = current_depth / touch_range
-                        current_pressure_level = int(round(normalized_pressure * 8))
-                    else:
-                        current_pressure_level = 0 
-            
-            px_side_warped = int(landmark.x * w_side_w)
-            color = (0, 0, 255) if is_touching_now else (0, 255, 0)
-            cv2.circle(frame_side_display, (px_side_warped, pen_y_side_warped), 8, color, -1)
-            cv2.putText(frame_side_display, f"Pressure: {current_pressure_level}", (px_side_warped + 10, pen_y_side_warped), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        # ★ Sideカメラの生映像に描画
+        px_side = int(landmark.x * w_side) 
+        color = (0, 0, 255) if is_touching_now else (0, 255, 0)
+        cv2.circle(frame_side, (px_side, pen_y_side), 8, color, -1)
+        cv2.putText(frame_side, f"Pressure: {current_pressure_level}", (px_side + 10, pen_y_side), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    if is_z_calibrated:
-        h_disp, w_disp, _ = frame_side_display.shape
-        cv2.line(frame_side_display, (0, Z_TOUCH_HEIGHT), (w_disp, Z_TOUCH_HEIGHT), (0, 255, 255), 2)
-        cv2.putText(frame_side_display, f"P=0 Y:{Z_TOUCH_HEIGHT}", (10, Z_TOUCH_HEIGHT - 10), 
+    # ★ Sideカメラの生映像にキャリブレーション情報を描画
+    if Y_TOUCH_THRESHOLD != -1:
+        h_disp, w_disp, _ = frame_side.shape
+        cv2.line(frame_side, (0, Y_TOUCH_THRESHOLD), (w_disp, Y_TOUCH_THRESHOLD), (0, 255, 255), 2)
+        cv2.putText(frame_side, f"P=0 Y:{Y_TOUCH_THRESHOLD}", (10, Y_TOUCH_THRESHOLD - 10), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        cv2.line(frame_side_display, (0, Z_PRESS_MAX_HEIGHT), (w_disp, Z_PRESS_MAX_HEIGHT), (0, 165, 255), 2)
-        cv2.putText(frame_side_display, f"P=8 Y:{Z_PRESS_MAX_HEIGHT}", (10, Z_PRESS_MAX_HEIGHT - 10), 
+    if Y_MAX_PRESS_THRESHOLD != -1:
+        h_disp, w_disp, _ = frame_side.shape
+        cv2.line(frame_side, (0, Y_MAX_PRESS_THRESHOLD), (w_disp, Y_MAX_PRESS_THRESHOLD), (0, 165, 255), 2)
+        cv2.putText(frame_side, f"P=8 Y:{Y_MAX_PRESS_THRESHOLD}", (10, Y_MAX_PRESS_THRESHOLD - 10), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
 
 
@@ -637,10 +706,12 @@ while True:
         if pen_pos_norm is not None:
             last_pen_pos_norm = pen_pos_norm
 
-    # ★★★ 5.8. 状態機械 (State Machine) - 交差判定ロジック追加 ★★★
+    # 5.8. 状態機械 (State Machine) - 交差判定ロジック追加
     if is_recording_session and not is_manually_paused and last_pen_pos_norm is not None:
         
-        if not is_z_calibrated:
+        # ★ 筆圧キャリブレーションのチェック
+        is_pressure_calibrated = (Y_TOUCH_THRESHOLD != -1 and Y_MAX_PRESS_THRESHOLD != -1)
+        if not is_pressure_calibrated:
              if is_pen_down: 
                  is_pen_down = False
                  print("--- 筆圧未調整のため Pen Up ---")
@@ -653,33 +724,20 @@ while True:
             record_data('down', current_time, current_pressure_level, last_pen_pos_norm)
         
         elif is_touching_now and is_pen_down:
-            # --- 状態：Pen Move (触れ続けている) ---
-            
-            # ★★★ 交差判定ロジック (Crossing detection logic) ★★★
-            event_to_record = 'move' # デフォルト (Default)
-            
-            # 0.5秒経過し、マスク済み基準画像が利用可能な場合
-            # (If 0.5s has passed and the masked base image is available)
+            event_to_record = 'move' 
             if last_binary_image_masked is not None:
                 (norm_x, norm_y) = last_pen_pos_norm
                 px, py = convert_to_custom_coords(norm_x, norm_y)
-                
                 if 0 <= py < WARPED_SIZE and 0 <= px < WARPED_SIZE:
-                    # 指の先端が「過去の墨」(255) の上にあるかチェック
-                    # (Check if fingertip is on "past ink" (255))
                     if last_binary_image_masked[py, px] == 255:
-                        event_to_record = 'crossing' # ★ イベントタイプを変更 (Change event type)
+                        event_to_record = 'crossing' 
             
-            # ★★★ 記録モード分岐 (Recording mode branch) ★★★
             if RECORDING_MODE == "Time":
-                # event_to_record ('move' or 'crossing') を記録
                 record_data(event_to_record, current_time, current_pressure_level, last_pen_pos_norm)
-            
             elif RECORDING_MODE == "Spatial":
                 (norm_x, norm_y) = last_pen_pos_norm
                 current_cell_id = get_cell_id(norm_x, norm_y)
                 if current_cell_id != last_cell_id:
-                    # event_to_record ('move' or 'crossing') を記録
                     record_data(event_to_record, current_time, current_pressure_level, last_pen_pos_norm)
             
         elif not is_touching_now and is_pen_down:
@@ -687,29 +745,19 @@ while True:
             print(f"Stroke {stroke_count} END (Up)")
             record_data('up', current_time, 0, last_pen_pos_norm)
 
-    # ★★★ 5.8b. 画像処理による軌跡補正 (手のマスク機能付き) ★★★
+    # 5.8b. 画像処理による軌跡補正 (手のマスク機能付き)
     if is_recording_session and not is_manually_paused and M_locked is not None:
         
         if current_time - last_image_proc_time > IMAGE_CORRECTION_INTERVAL:
             
             current_binary_image = get_warped_binary_image(frame_top, M_locked, IMAGE_CORRECTION_THRESHOLD)
             
-            # ★ 5.8 が参照するために、現在のマスク済み画像を計算
             hand_mask = get_hand_mask(hand_landmarks_top, (top_h, top_w), M_locked, WARPED_SIZE)
             inverted_hand_mask = cv2.bitwise_not(hand_mask)
             current_binary_image_masked = cv2.bitwise_and(current_binary_image, inverted_hand_mask)
 
             if last_binary_image is not None and current_binary_image is not None:
-                # ★ 差分計算用の 'last_binary_image' はマスクを適用しない
-                # (古い 'last_binary_image' には、0.5秒前の手の影が含まれているため)
-                # (We use the unmasked 'last_binary_image' for diff calculation)
-                
-                # (1) 0.5秒前の画像から「現在の手」をマスク (Remove "current hand" from "last image")
                 last_binary_image_no_hand = cv2.bitwise_and(last_binary_image, inverted_hand_mask)
-                # (2) 現在の画像から「現在の手」をマスク (Remove "current hand" from "current image")
-                # (current_binary_image_masked は上で計算済み)
-                
-                # (3) 手を除去した画像同士で差分を計算
                 diff_image = cv2.absdiff(current_binary_image_masked, last_binary_image_no_hand)
                 
                 kernel = np.ones((3, 3), np.uint8)
@@ -735,10 +783,9 @@ while True:
                     })
                     print(f"--- 画像補正: 新しい軌跡をセル {cell_id_corr} に検出 ---")
 
-            # (6) 状態を更新
             last_image_proc_time = current_time
-            last_binary_image = current_binary_image # 次回のための「過去」画像
-            last_binary_image_masked = current_binary_image_masked # 5.8 が参照するための「過去(マスク済)」画像
+            last_binary_image = current_binary_image 
+            last_binary_image_masked = current_binary_image_masked 
             
 
     # 5.9. 画面表示 (Screen display)
@@ -772,13 +819,15 @@ while True:
         cv2.putText(frame_top, "Find Area Markers (0,1,2,3) to Lock", (20, warning_y), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2)
     elif is_area_locked:
-        if not is_z_calibrated:
-             cv2.putText(frame_top, "CALIBRATE PRESSURE (Press 'z' and 'm')", (20, warning_y), 
+        # ★ 筆圧キャリブレーションのチェック (旧方式)
+        if Y_MAX_PRESS_THRESHOLD == -1:
+             cv2.putText(frame_top, "CALIBRATE PRESSURE (Press 'c' and 'm')", (20, warning_y), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
 
 
     cv2.imshow("Top-Down View (X/Y)", frame_top)
-    cv2.imshow("Side View (Z/Pressure)", frame_side_display)
+    # ★ Side View は生のフレームを表示
+    cv2.imshow("Side View (Z/Pressure)", frame_side)
 
     # 5.10. キー入力 (Key input)
     key = cv2.waitKey(1) & 0xFF
@@ -809,56 +858,30 @@ while True:
             if not is_area_locked:
                 if M_live is None:
                     print("エラー: Topカメラで4隅のマーカーが認識されていません。")
-                elif M_side_live is None:
-                    print("エラー: Sideカメラで4隅のマーカーが認識されていません。")
+                # ★ Sideカメラのマーカーチェックを削除
                 else:
                     M_locked = M_live
-                    M_side_locked = M_side_live 
+                    # M_side_locked は不要
                     is_area_locked = True
-                    print("--- Top/Side エリアをロックしました ---")
-                    print("★ 次に [z](筆圧0), [m](筆圧8) を調整してください。")
+                    print("--- Top エリアをロックしました ---")
+                    print("★ [s] キーで記録を開始できます。")
             else:
                 M_locked = None
-                M_side_locked = None 
+                # M_side_locked は不要
                 is_area_locked = False
-                is_z_calibrated = False 
-                print("--- 全てのロックとキャリブレーションを解除しました ---")
+                # is_z_calibrated は不要
+                print("--- エリアのロックを解除しました ---")
 
     if key == ord('o'):
         print("--- MediaPipeOnlyモードでは、筆オフセット調整 [o] は不要です。 ---")
         continue
             
-    if key == ord('z'):
-        if is_recording_session:
-            print("エラー: 筆圧調整は記録セッション開始前に行ってください。")
-        elif not is_area_locked:
-            print("エラー: 'l'キーでエリア/平面をロックしてから調整してください。")
-        elif pen_y_side_warped == -1: 
-             print("エラー: Sideカメラで指が検出されていません。")
-        else:
-            Z_TOUCH_HEIGHT = pen_y_side_warped
-            print(f"--- 筆圧 0 (タッチ) を設定しました (補正Y={Z_TOUCH_HEIGHT}) ---")
-            if Z_PRESS_MAX_HEIGHT != -1:
-                is_z_calibrated = True
-                print("--- 筆圧キャリブレーション 完了 ---")
+    # ★★★ 'z'/'m' キーの処理を 'c'/'m' に置き換える ★★★
+    # (ただし、'c'キーはキャプチャに使っているので 'v'キー に変更)
+    # (キャリブレーションはループの外 (5.2) で実行するので、ここでは削除)
 
-    if key == ord('m'):
-        if is_recording_session:
-            print("エラー: 筆圧調整は記録セッション開始前に行ってください。")
-        elif not is_area_locked:
-            print("エラー: 'l'キーでエリア/平面をロックしてから調整してください。")
-        elif pen_y_side_warped == -1: 
-             print("エラー: Sideカメラで指が検出されていません。")
-        elif Z_TOUCH_HEIGHT != -1 and pen_y_side_warped <= Z_TOUCH_HEIGHT:
-            print(f"エラー: 最大筆圧(Y={pen_y_side_warped})は、筆圧0(Y={Z_TOUCH_HEIGHT})より大きくする必要があります。")
-        else:
-            Z_PRESS_MAX_HEIGHT = pen_y_side_warped
-            print(f"--- 筆圧 8 (最大) を設定しました (補正Y={Z_PRESS_MAX_HEIGHT}) ---")
-            if Z_TOUCH_HEIGHT != -1:
-                is_z_calibrated = True
-                print("--- 筆圧キャリブレーション 完了 ---")
-
-    if key == ord('c'):
+    # ★ 'v' キーでキャプチャ (旧 'c' キー)
+    if key == ord('v'): 
         if is_recording_session:
             print("エラー: 撮影は記録セッションを停止（[s]キー）してから行ってください。")
         elif not is_area_locked or M_locked is None:
@@ -882,8 +905,9 @@ while True:
         if not is_recording_session:
             if not is_area_locked:
                 print("エラー: 'l'キーでエリアをロックしてください。")
-            elif not is_z_calibrated:
-                print("エラー: 'z'キーと'm'キーで筆圧を調整してください。")
+            # ★ 筆圧キャリブレーションのチェック (旧方式)
+            elif Y_MAX_PRESS_THRESHOLD == -1:
+                print("エラー: メインループの前に 'c'キーと'm'キーで筆圧を調整してください。")
             else:
                 print("--- 画像処理の基準（現在の紙の状態）を取得します... ---")
                 frame_top_now = frame_top 
@@ -893,7 +917,6 @@ while True:
                     print("エラー: 2値化画像の取得に失敗しました。")
                 else:
                     hand_mask_now = get_hand_mask(hand_landmarks_top, (top_h, top_w), M_locked, WARPED_SIZE)
-                    # ★ 5.8 が参照する「マスク済み基準画像」も初期化
                     last_binary_image_masked = cv2.bitwise_and(last_binary_image, cv2.bitwise_not(hand_mask_now))
                     print("--- 基準画像から現在の手をマスクしました ---")
 
@@ -905,7 +928,7 @@ while True:
             is_pen_down = False 
             is_manually_paused = False 
             last_binary_image = None 
-            last_binary_image_masked = None # ★ リセット
+            last_binary_image_masked = None 
             print("--- 記録セッション停止 ---")
 
 # --- 6. 終了処理 (Cleanup) ---
