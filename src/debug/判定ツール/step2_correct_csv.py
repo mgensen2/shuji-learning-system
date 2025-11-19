@@ -6,7 +6,7 @@ import sys
 
 # --- 設定項目 ---
 USER_IMAGE_FILE = 'calligraphy_image.png'       # 書いた文字の画像 (正解位置)
-INPUT_CSV_FILE  = 'unpitsu_data_full.csv'       # 記録されたCSV (ズレている可能性あり)
+INPUT_CSV_FILE  = '10_full.csv'       # 記録されたCSV (ズレている可能性あり)
 OUTPUT_CSV_FILE = 'unpitsu_data_corrected.csv'  # 補正後のCSV
 DEBUG_IMAGE     = 'correction_debug.png'        # 補正確認用画像
 
