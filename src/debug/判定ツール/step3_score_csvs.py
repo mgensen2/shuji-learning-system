@@ -1,100 +1,60 @@
-import cv2
-import numpy as np
 import pandas as pd
+import numpy as np
+from scipy.spatial.distance import cdist
 import os
-import sys
 
-# --- 設定項目 ---
-SAMPLE_CSV_FILE = 'sample_data.csv'        # お手本のCSVデータ
-USER_CSV_FILE   = 'unpitsu_data_corrected.csv' # 自分のCSVデータ（補正後の使用を推奨）
-OUTPUT_COMPARE_IMG = 'result_csv_compare.png'  # 比較結果画像
+SAMPLE_CSV = "sample.csv"
+USER_CSV = "normalized_data.csv" # Step2で正規化したものを使う想定
 
-# 座標変換パラメータ
-WARPED_SIZE = 800
-COORD_LIMIT = 200.0
-
-def convert_from_custom_coords(x, y):
-    """CSV座標 -> ピクセル座標"""
-    norm_x_01 = (x / COORD_LIMIT) + 1.0
-    norm_y_01 = y / -COORD_LIMIT
-    px = norm_x_01 * WARPED_SIZE
-    py = norm_y_01 * WARPED_SIZE
-    return int(round(px)), int(round(py))
-
-def render_csv_trace(df):
-    """CSVデータから軌跡画像(2値)を生成"""
-    canvas = np.zeros((WARPED_SIZE, WARPED_SIZE), dtype=np.uint8)
-    last_pos = None
-    is_drawing = False
+def load_points_and_velocity(filepath):
+    if not os.path.exists(filepath): return None, None
+    df = pd.read_csv(filepath, header=0)
     
-    for _, row in df.iterrows():
-        px, py = convert_from_custom_coords(row['x'], row['y'])
-        # 筆圧を太さに反映 (筆圧0でも最低1pxで描画して形を見る)
-        pressure = row['pressure'] if 'pressure' in row else 4
-        thickness = int(pressure * 2) + 2 
-        
-        if row['event_type'] == 'down':
-            is_drawing = True
-            last_pos = (px, py)
-            cv2.circle(canvas, (px, py), thickness//2, 255, -1)
-        elif row['event_type'] == 'move' and is_drawing and last_pos:
-            cv2.line(canvas, last_pos, (px, py), 255, thickness)
-            last_pos = (px, py)
-        elif row['event_type'] == 'up':
-            is_drawing = False
-            last_pos = None
-    return canvas
+    # 描画中のみ抽出
+    df_draw = df[df['pen_state'] == 1].copy()
+    
+    # 座標点列
+    points = df_draw[['x', 'y']].values
+    
+    # 速度計算
+    df_draw['time_diff'] = df_draw['timestamp'].diff()
+    df_draw['dist'] = np.sqrt(df_draw['x'].diff()**2 + df_draw['y'].diff()**2)
+    df_draw['velocity'] = df_draw['dist'] / df_draw['time_diff']
+    df_draw['velocity'] = df_draw['velocity'].fillna(0).replace([np.inf, -np.inf], 0)
+    
+    velocity = df_draw['velocity'].values
+    return points, velocity
 
-def calculate_iou(img1, img2):
-    """IoU (一致率) 計算"""
-    intersection = cv2.bitwise_and(img1, img2)
-    union = cv2.bitwise_or(img1, img2)
-    count_inter = cv2.countNonZero(intersection)
-    count_union = cv2.countNonZero(union)
-    if count_union == 0: return 0.0
-    return count_inter / count_union
+def calculate_dtw(seq1, seq2):
+    if len(seq1) == 0 or len(seq2) == 0: return float('inf')
+    d = cdist(seq1, seq2, metric='euclidean')
+    n, m = d.shape
+    cost = np.zeros((n, m))
+    cost[0, 0] = d[0, 0]
+    for i in range(1, n): cost[i, 0] = cost[i-1, 0] + d[i, 0]
+    for j in range(1, m): cost[0, j] = cost[0, j-1] + d[0, j]
+    for i in range(1, n):
+        for j in range(1, m):
+            cost[i, j] = d[i, j] + min(cost[i-1, j], cost[i, j-1], cost[i-1, j-1])
+    return cost[-1, -1] / (n + m)
 
 def main():
-    print("--- Step 3: CSV筆跡一致率の判定 ---")
+    pts_s, vel_s = load_points_and_velocity(SAMPLE_CSV)
+    pts_u, vel_u = load_points_and_velocity(USER_CSV)
     
-    if not os.path.exists(SAMPLE_CSV_FILE):
-        print(f"エラー: お手本CSV ({SAMPLE_CSV_FILE}) が見つかりません。")
-        return
-    if not os.path.exists(USER_CSV_FILE):
-        print(f"エラー: ユーザーCSV ({USER_CSV_FILE}) が見つかりません。")
+    if pts_s is None or pts_u is None:
+        print("Error loading data.")
         return
 
-    # 1. CSV読み込み
-    print("データを読み込んで軌跡を生成中...")
-    df_sample = pd.read_csv(SAMPLE_CSV_FILE)
-    df_user   = pd.read_csv(USER_CSV_FILE)
+    # 1. DTW (軌跡の形状類似度)
+    dtw_score = calculate_dtw(pts_s, pts_u)
+    print(f"Trajectory DTW Score: {dtw_score:.4f} (Lower is better)")
 
-    # 2. 画像化 (ラスタライズ)
-    img_sample = render_csv_trace(df_sample)
-    img_user   = render_csv_trace(df_user)
-
-    # 3. 一致率計算
-    score = calculate_iou(img_sample, img_user)
-    print(f"\n★ CSV一致率 (Trace IoU): {score * 100:.1f}%")
-
-    # 4. 比較画像の保存
-    # 赤: 自分の軌跡, 緑: お手本の軌跡, 黄: 重なっている部分
-    result_view = np.zeros((WARPED_SIZE, WARPED_SIZE, 3), dtype=np.uint8)
-    
-    # 重ね合わせロジック
-    # Bチャンネル(青)は使わない
-    # Gチャンネル(緑) = お手本
-    result_view[:, :, 1] = img_sample 
-    # Rチャンネル(赤) = 自分
-    result_view[:, :, 2] = img_user   
-    
-    # 両方ある場所(R+G=Yellow)は一致、片方だけなら赤か緑に見える
-    
-    cv2.imwrite(OUTPUT_COMPARE_IMG, result_view)
-    print(f"比較画像を保存しました: {OUTPUT_COMPARE_IMG}")
-    print("  [緑] お手本のみ")
-    print("  [赤] 自分のみ")
-    print("  [黄] 一致した部分")
+    # 2. 速度相関 (リズムの類似度) - 簡易的にサイズを合わせて相関を見る例
+    # 実際は速度波形に対してもDTWをかけるのがベストですが、ここでは基本統計で比較
+    avg_v_s = np.mean(vel_s)
+    avg_v_u = np.mean(vel_u)
+    print(f"Avg Velocity: Sample={avg_v_s:.2f}, User={avg_v_u:.2f}")
 
 if __name__ == "__main__":
     main()

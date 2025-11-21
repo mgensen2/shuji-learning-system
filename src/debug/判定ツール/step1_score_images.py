@@ -1,71 +1,79 @@
 import cv2
 import numpy as np
+import pandas as pd
 import os
-import sys
 
-# --- 設定項目 ---
-SAMPLE_IMAGE_FILE = 'calligraphy_sample.png'  # お手本
-USER_IMAGE_FILE   = 'calligraphy_image.png'   # 書いた文字
-OUTPUT_RESULT_IMG = 'result_score_view.png'   # 結果画像
+# --- 設定 ---
+SAMPLE_CSV = "sample.csv"
+USER_CSV = "unpitsu_data_full.csv"
+# -----------
 
-PROCESS_SIZE = 800  # 処理サイズ
+CANVAS_SIZE = 800
+PADDING = 50
 
-def calculate_iou(img1, img2):
-    """IoU (一致率) を計算"""
-    intersection = cv2.bitwise_and(img1, img2)
-    union = cv2.bitwise_or(img1, img2)
-    count_inter = cv2.countNonZero(intersection)
-    count_union = cv2.countNonZero(union)
-    if count_union == 0: return 0.0
-    return count_inter / count_union
+def load_csv(filepath):
+    if not os.path.exists(filepath):
+        print(f"File not found: {filepath}")
+        return None
+    return pd.read_csv(filepath, header=0)
+
+def get_bounds(df1, df2):
+    all_x = pd.concat([df1['x'], df2['x']])
+    all_y = pd.concat([df1['y'], df2['y']])
+    return (all_x.min(), all_x.max()), (all_y.min(), all_y.max())
+
+def render_trace(df, x_range, y_range, color=(255, 255, 255)):
+    """pen_stateを用いて軌跡を描画"""
+    canvas = np.zeros((CANVAS_SIZE, CANVAS_SIZE, 3), dtype=np.uint8)
+    min_x, max_x = x_range
+    min_y, max_y = y_range
+    
+    range_x = max(max_x - min_x, 1)
+    range_y = max(max_y - min_y, 1)
+    scale = min((CANVAS_SIZE - 2*PADDING) / range_x, (CANVAS_SIZE - 2*PADDING) / range_y)
+    
+    def to_px(x, y):
+        return int((x - min_x) * scale + PADDING), int((y - min_y) * scale + PADDING)
+
+    # ストロークごとに描画
+    for _, group in df.groupby('stroke_id'):
+        # pen_state == 1 の点のみを抽出
+        points_df = group[group['pen_state'] == 1]
+        if len(points_df) > 1:
+            pts = [to_px(r['x'], r['y']) for _, r in points_df.iterrows()]
+            cv2.polylines(canvas, [np.array(pts)], False, color, 3, cv2.LINE_AA)
+            
+    return canvas
+
+def calc_iou(img1, img2):
+    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    _, bin1 = cv2.threshold(gray1, 1, 255, cv2.THRESH_BINARY)
+    _, bin2 = cv2.threshold(gray2, 1, 255, cv2.THRESH_BINARY)
+    
+    inter = cv2.bitwise_and(bin1, bin2)
+    union = cv2.bitwise_or(bin1, bin2)
+    
+    c_inter = cv2.countNonZero(inter)
+    c_union = cv2.countNonZero(union)
+    return c_inter / c_union if c_union > 0 else 0
 
 def main():
-    print("--- Step 1: 画像一致率の判定 ---")
+    df_s = load_csv(SAMPLE_CSV)
+    df_u = load_csv(USER_CSV)
     
-    # 画像読み込み
-    if not os.path.exists(SAMPLE_IMAGE_FILE) or not os.path.exists(USER_IMAGE_FILE):
-        print("エラー: 画像ファイルが見つかりません。")
-        return
+    if df_s is None or df_u is None: return
 
-    # グレースケール読み込み & リサイズ
-    img_sample = cv2.resize(cv2.imread(SAMPLE_IMAGE_FILE, cv2.IMREAD_GRAYSCALE), (PROCESS_SIZE, PROCESS_SIZE))
-    img_user   = cv2.resize(cv2.imread(USER_IMAGE_FILE, cv2.IMREAD_GRAYSCALE), (PROCESS_SIZE, PROCESS_SIZE))
-
-    # 2値化 (白黒反転: 書いた部分を白(255)にする)
-    _, bin_sample = cv2.threshold(img_sample, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-    _, bin_user   = cv2.threshold(img_user, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-
-    # スコア計算
-    score = calculate_iou(bin_sample, bin_user)
+    xr, yr = get_bounds(df_s, df_u)
     
-    print(f"\n★ 一致率 (IoUスコア): {score * 100:.1f}%")
+    img_s = render_trace(df_s, xr, yr, (0, 255, 0)) # Green
+    img_u = render_trace(df_u, xr, yr, (0, 0, 255)) # Red
     
-    if score > 0.8: print("評価: 秀 (Excellent)")
-    elif score > 0.6: print("評価: 優 (Good)")
-    else: print("評価: 要練習 (Keep trying)")
-
-    # 結果画像の作成 (可視化)
-    # 青: お手本にあって自分にない (書き不足)
-    # 赤: 自分にあってお手本にない (はみ出し)
-    # 黒: 一致
+    iou = calc_iou(img_s, img_u)
+    print(f"Image Score (IoU): {iou*100:.2f}")
     
-    # ベースを白にする
-    result_view = np.full((PROCESS_SIZE, PROCESS_SIZE, 3), 255, dtype=np.uint8)
-    
-    mask_match = cv2.bitwise_and(bin_sample, bin_user)
-    mask_missing = cv2.bitwise_and(bin_sample, cv2.bitwise_not(bin_user))
-    mask_extra = cv2.bitwise_and(cv2.bitwise_not(bin_sample), bin_user)
-    
-    result_view[mask_extra == 255] = [0, 0, 255]   # 赤 (BGR)
-    result_view[mask_missing == 255] = [255, 0, 0] # 青
-    result_view[mask_match == 255] = [0, 0, 0]     # 黒
-    
-    # お手本の輪郭を緑で描画
-    contours, _ = cv2.findContours(bin_sample, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(result_view, contours, -1, (0, 200, 0), 1)
-
-    cv2.imwrite(OUTPUT_RESULT_IMG, result_view)
-    print(f"\n詳細画像を保存しました: {OUTPUT_RESULT_IMG}")
+    merged = cv2.addWeighted(img_s, 1, img_u, 1, 0)
+    cv2.imwrite("result_step1_iou.png", merged)
 
 if __name__ == "__main__":
     main()

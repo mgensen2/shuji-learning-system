@@ -307,7 +307,7 @@ def save_all_data():
 
     print(f"--- 終了処理: 残りの {len(drawing_data)} 件のデータを保存します... ---")
     if drawing_data:
-        headers = drawing_data[0].keys()
+        headers = ['timestamp', 'event_type', 'stroke_id', 'x', 'y', 'pressure', 'cell_id', 'pen_state']
         with open('unpitsu_data_full.csv', 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
@@ -350,7 +350,7 @@ def save_data_with_prompt():
     transitions_csv_path = f"{filename_base}_transitions.csv"
 
     try:
-        headers = temp_drawing_data[0].keys()
+        headers = ['timestamp', 'event_type', 'stroke_id', 'x', 'y', 'pressure', 'cell_id', 'pen_state']
         with open(full_csv_path, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
@@ -470,10 +470,11 @@ def record_data(event_type, timestamp, pressure, pen_pos_norm):
     (norm_x, norm_y) = pen_pos_norm
     x, y = convert_to_custom_coords(norm_x, norm_y)
     cell_id = get_cell_id(norm_x, norm_y)
-    
+    pen_state =0 if event_type == 'up' else 1
+
     drawing_data.append({
         'timestamp': timestamp, 'event_type': event_type, 'stroke_id': stroke_count,
-        'x': f"{x:.2f}", 'y': f"{y:.2f}", 'pressure': f"{pressure:.4f}", 'cell_id': cell_id
+        'x': f"{x:.2f}", 'y': f"{y:.2f}", 'pressure': f"{pressure:.4f}", 'cell_id': cell_id,'pen_state': pen_state
     })
     
     if event_type != 'up' and last_cell_id != -1 and cell_id != last_cell_id:
