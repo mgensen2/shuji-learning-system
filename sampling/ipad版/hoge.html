@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>運筆データ取得 (プロッタ対応版)</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            touch-action: none;
+            overflow: auto; /* スクロールできるように変更 */
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+        }
+        #controls {
+            padding: 10px;
+            background-color: #fff;
+            border-bottom: 1px solid #ccc;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+        }
+        .control-group {
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+            display: flex;
+            align-items: center;
+        }
+        .control-group label {
+            font-size: 14px;
+            margin-right: 5px;
+        }
+        input[type="number"] {
+            width: 60px;
+            padding: 4px;
+            font-size: 14px;
+        }
+        button {
+            font-size: 14px;
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+        #clearBtn {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+        }
+        #plotterBtn {
+            background-color: #e2e3e5;
+            border: 1px solid #d6d8db;
+            font-weight: bold;
+        }
+        #drawCanvas {
+            background-color: #ffffff;
+            cursor: crosshair;
+            border: 1px solid #333;
+            display: block;
+            margin: 10px auto;
+        }
+        #previewArea {
+            width: 95%;
+            max-width: 800px;
+            margin: 0 auto 20px auto;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            padding: 10px;
+        }
+        #plotterPreview {
+            width: 100%;
+            height: 150px;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 5px;
+            white-space: pre;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <!-- 記録間隔設定 -->
+        <div class="control-group">
+            <label for="intervalInput">記録間隔(ms):</label>
+            <input type="number" id="intervalInput" value="50" min="10" step="10">
+        </div>
+
+        <button id="downloadFullDataBtn">全データ (CSV)</button>
+        <!-- <button id="downloadTransitionBtn">セル移動のみ (CSV)</button> --> <!-- 今回は不要なら削除可 -->
+        
+        <button id="plotterBtn">プロッタ用データ (CSV)</button>
+        <button id="clearBtn">クリア</button>
+    </div>
+
+    <canvas id="drawCanvas"></canvas>
+
+    <!-- プロッタデータ確認用エリア -->
+    <div id="previewArea">
+        <label for="plotterPreview"><strong>プロッタ用データプレビュー (Command, X, Y, Z, F, Delay, Cell):</strong></label>
+        <textarea id="plotterPreview" readonly placeholder="ここにプロッタ用データが表示されます"></textarea>
+    </div>
+
+    <script src="hoge.js"></script>
+
+</body>
+</html>
