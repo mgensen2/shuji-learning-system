@@ -1,220 +1,441 @@
 import cv2
 import cv2.aruco as aruco
 import numpy as np
+import time
 import csv
 import os
 import sys
+from datetime import datetime
+import mediapipe as mp
 
-# --- 設定 ---
-WARPED_SIZE = 800
-COORD_LIMIT = 200.0
-CORRECTION_SEARCH_RADIUS = 50 # 補正探索範囲(px)
-
-# ArUco
+# --- 設定 (Settings) ---
 ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
 DETECTOR_PARAMS = aruco.DetectorParameters()
 DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
+
 CORNER_IDS = [0, 1, 2, 3]
 CORNER_INDEX_MAP = { 0: 2, 1: 3, 2: 0, 3: 1 }
 
-# 色設定用
-TARGET_COLOR_LOWER = None
-TARGET_COLOR_UPPER = None
+# 保存設定
+OUTPUT_DIR = "recordings"
+CAPTURE_IMAGE_FILENAME = 'calligraphy_image.png'
+CALIB_FILE_NAME = 'unpitsu_calibration.npz'
+LENS_CALIB_FILE_NAME = 'top_camera_lens.npz'
 
-def pick_color_click(event, x, y, flags, param):
-    global TARGET_COLOR_LOWER, TARGET_COLOR_UPPER
+# 座標系設定
+COORD_LIMIT = 200.0
+WARPED_SIZE = 800
+GRID_SIZE = 8
+CELL_SIZE_PX = WARPED_SIZE / GRID_SIZE
+SAMPLING_INTERVAL = 0.05 
+
+# Topカメラ用 色追跡設定
+TOP_COLOR_LOWER = None
+TOP_COLOR_UPPER = None
+
+# Sideカメラ用 MediaPipe設定
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+# Sideカメラのみで使用
+hands_side = mp.solutions.hands.Hands(
+    max_num_hands=1, 
+    min_detection_confidence=0.5, 
+    min_tracking_confidence=0.5
+)
+
+# ノイズ除去用カーネル (色追跡用)
+KERNEL_OPEN = np.ones((5, 5), np.uint8)
+KERNEL_CLOSE = np.ones((20, 20), np.uint8)
+
+# --- グローバル変数 ---
+is_recording_session = False
+is_pen_down = False
+is_area_locked = False
+stroke_count = 0
+last_record_time = 0
+last_cell_id = -1
+
+M_live = None
+M_locked = None
+
+# 筆圧 (Z軸 - MediaPipe由来)
+Z_TOUCH_HEIGHT = -1
+Z_PRESS_MAX_HEIGHT = -1
+is_z_calibrated = False
+
+# レンズ歪み
+TOP_CAM_MTX = None
+TOP_CAM_DIST = None
+TOP_CAM_MAP_X = None
+TOP_CAM_MAP_Y = None
+
+# --- ヘルパー関数 ---
+
+def select_camera_index(prompt_text):
+    print(f"--- {prompt_text} のカメラを選択 ---")
+    available = []
+    for i in range(10):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            available.append(i)
+            cap.release()
+    if not available: return None
+    
+    for index in available:
+        cap = cv2.VideoCapture(index)
+        if not cap.isOpened(): continue
+        print(f"Checking Camera {index}...")
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            cv2.putText(frame, f"Index: {index} ({prompt_text}) - 'y':Use, 'n':Skip", (10, 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
+            cv2.imshow("Camera Select", frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('y'):
+                cv2.destroyAllWindows()
+                cap.release()
+                return index
+            if key == ord('n'):
+                break
+        cap.release()
+    cv2.destroyAllWindows()
+    return None
+
+def pick_color_range(event, x, y, flags, param):
+    """マウスクリックでTopカメラのHSV色範囲を設定"""
     if event == cv2.EVENT_LBUTTONDOWN:
-        frame_hsv = param
+        frame_hsv = param['frame_hsv']
+        
+        # クリックしたピクセルのHSV値を取得
         pixel = frame_hsv[y, x]
         
-        h_sens, s_sens, v_sens = 10, 50, 80
-        TARGET_COLOR_LOWER = np.array([max(0, pixel[0]-h_sens), max(50, pixel[1]-s_sens), max(50, pixel[2]-v_sens)])
-        TARGET_COLOR_UPPER = np.array([min(180, pixel[0]+h_sens), 255, 255])
-        print(f"Tracking Color Set: {pixel}")
+        # 許容範囲
+        h_sens = 10 
+        s_sens = 50 
+        v_sens = 80 
+        
+        lower = np.array([max(0, pixel[0] - h_sens), max(50, pixel[1] - s_sens), max(50, pixel[2] - v_sens)])
+        upper = np.array([min(180, pixel[0] + h_sens), 255, 255])
+        
+        global TOP_COLOR_LOWER, TOP_COLOR_UPPER
+        TOP_COLOR_LOWER = lower
+        TOP_COLOR_UPPER = upper
+        
+        print(f"[TOP] 色を設定しました: HSV {pixel}")
 
-def get_marker_point(detected_ids, detected_corners, target_id):
-    if detected_ids is None: return None
-    for i, marker_id in enumerate(detected_ids.flatten()):
-        if marker_id == target_id:
-            return detected_corners[i][0][CORNER_INDEX_MAP[target_id]].astype(int)
-    return None
-
-def get_transform_matrix(frame):
-    corners, ids, _ = DETECTOR.detectMarkers(frame)
-    src_pts = [get_marker_point(ids, corners, id) for id in CORNER_IDS]
-    if any(pt is None for pt in src_pts): return None
+def setup_top_color_tracking(cap_top):
+    """Topカメラのマーカー色を設定する"""
+    print("\n--- カラーマーカー設定 (Topカメラのみ) ---")
+    print("1. Topカメラウィンドウで、ペンのマーカーをクリックしてください。")
+    print("2. 設定したら 'Esc' キーで完了します。")
     
-    src_pts_np = np.float32(src_pts)
-    dst_pts = np.float32([[0, 0], [WARPED_SIZE, 0], [WARPED_SIZE, WARPED_SIZE], [0, WARPED_SIZE]])
-    return cv2.getPerspectiveTransform(src_pts_np, dst_pts)
-
-def track_color(frame, lower, upper):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, lower, upper)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3,3), np.uint8))
-    
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if contours:
-        c = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(c) > 20:
-            M = cv2.moments(c)
-            if M["m00"] != 0:
-                return int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
-    return None
-
-def analyze():
-    global TARGET_COLOR_LOWER
-    
-    if len(sys.argv) > 1:
-        base_path = sys.argv[1]
-    else:
-        base_path = input("セッションパスを入力 (recordings/session_...): ").strip()
-
-    top_video = f"{base_path}_top.mp4"
-    side_video = f"{base_path}_side.mp4"
-    final_image = f"{base_path}_final.png" # 録画ツールでは保存していない場合は別途用意
-    
-    # 1. 色設定 (動画の最初のフレームから)
-    cap = cv2.VideoCapture(top_video)
-    ret, first_frame = cap.read()
-    if not ret: sys.exit("動画が開けません")
-    
-    print("--- 色設定 ---")
-    print("表示されたウィンドウで、追跡するマーカーをクリックしてください。")
-    print("決定したらキーを押してください。")
-    
-    hsv_first = cv2.cvtColor(first_frame, cv2.COLOR_BGR2HSV)
-    cv2.namedWindow("Pick Color")
-    cv2.setMouseCallback("Pick Color", pick_color_click, hsv_first)
-    
-    while TARGET_COLOR_LOWER is None:
-        cv2.imshow("Pick Color", first_frame)
-        if cv2.waitKey(10) == 27: sys.exit()
-    cv2.destroyWindow("Pick Color")
-    
-    # 2. 完成画像から距離マップ作成 (補正用)
-    print("完成画像を解析中...")
-    # 完成画像がない場合は、動画の最終フレームを使うなどのフォールバックも可能だが今回は必須とする
-    if not os.path.exists(final_image):
-        print("警告: 完成画像(_final.png)が見つかりません。動画の最終フレームを使用しますか？(y/n)")
-        if input() == 'y':
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(cap.get(cv2.CAP_PROP_FRAME_COUNT))-5)
-            _, final_frame = cap.read()
-            img_final = final_frame
-        else:
-            return
-    else:
-        img_final = cv2.imread(final_image)
-
-    M_locked = get_transform_matrix(img_final)
-    if M_locked is None:
-        print("エラー: マーカー(0-3)が見つかりません。")
-        return
-
-    warped_final = cv2.warpPerspective(img_final, M_locked, (WARPED_SIZE, WARPED_SIZE))
-    gray_final = cv2.cvtColor(warped_final, cv2.COLOR_BGR2GRAY)
-    _, bin_final = cv2.threshold(gray_final, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    # 距離マップ (黒い部分への距離)
-    dist_map = cv2.distanceTransform(bin_final, cv2.DIST_L2, 5)
-
-    # 3. 解析実行
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # 最初に戻す
-    cap_side = cv2.VideoCapture(side_video)
-    
-    csv_data = []
-    stroke_id = 0
-    is_down = False
-    frame_idx = 0
-    
-    print("解析中...")
+    cv2.namedWindow("Top View (Setup)")
     
     while True:
-        ret, frame = cap.read()
-        ret_s, frame_s = cap_side.read()
-        if not ret: break
+        ret_top, frame_top = cap_top.read()
+        if not ret_top: break
         
-        frame_idx += 1
+        if TOP_CAM_MAP_X is not None:
+            frame_top = cv2.remap(frame_top, TOP_CAM_MAP_X, TOP_CAM_MAP_Y, cv2.INTER_LINEAR)
+            
+        hsv_top = cv2.cvtColor(frame_top, cv2.COLOR_BGR2HSV)
         
-        # Top: XY座標
-        pt = track_color(frame, TARGET_COLOR_LOWER, TARGET_COLOR_UPPER)
+        cv2.setMouseCallback("Top View (Setup)", pick_color_range, {'frame_hsv': hsv_top})
         
-        # Side: 簡易筆圧 (色のY座標)
-        # ※Side動画の色設定も必要だが、簡略化のためTopと同じ色か、
-        #   もしくはSideは固定位置のボール等を追うならロジック追加が必要。
-        #   ここでは「Topと同じ色のマーカーがSideでも見える」と仮定。
-        pt_side = track_color(frame_s if ret_s else frame, TARGET_COLOR_LOWER, TARGET_COLOR_UPPER)
-        pressure = pt_side[1] if pt_side else 0 # 簡易値 (Y座標)
+        status_top = "OK" if TOP_COLOR_LOWER is not None else "Click Marker"
         
-        if pt:
-            # 射影変換
-            src = np.array([[[pt[0], pt[1]]]], dtype=np.float32)
-            dst = cv2.perspectiveTransform(src, M_locked)
-            wx, wy = int(dst[0][0][0]), int(dst[0][0][1])
+        if TOP_COLOR_LOWER is not None:
+            mask = cv2.inRange(hsv_top, TOP_COLOR_LOWER, TOP_COLOR_UPPER)
+            preview = cv2.bitwise_and(frame_top, frame_top, mask=mask)
+            cv2.imshow("Top View (Setup)", preview)
+        else:
+            cv2.putText(frame_top, status_top, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+            cv2.imshow("Top View (Setup)", frame_top)
             
-            # ★ 吸着補正 ★
-            final_x, final_y = wx, wy
-            corrected = 0
-            
-            if 0 <= wx < WARPED_SIZE and 0 <= wy < WARPED_SIZE:
-                d = dist_map[wy, wx]
-                # 墨の上(0)でなく、かつ近くに墨がある場合
-                if d > 0 and d < CORRECTION_SEARCH_RADIUS:
-                    # 近傍探索して距離0(墨)または最小の場所へ移動
-                    # (簡易実装: 周囲を探索)
-                    min_local = d
-                    best_dx, best_dy = 0, 0
-                    r = int(d) + 2
-                    for dy in range(-r, r+1, 2):
-                        for dx in range(-r, r+1, 2):
-                            ny, nx = wy+dy, wx+dx
-                            if 0<=ny<WARPED_SIZE and 0<=nx<WARPED_SIZE:
-                                if dist_map[ny, nx] < min_local:
-                                    min_local = dist_map[ny, nx]
-                                    best_dx, best_dy = dx, dy
-                    final_x += best_dx
-                    final_y += best_dy
-                    corrected = 1
-            
-            # 座標変換
-            nx = (final_x / WARPED_SIZE - 1.0) * COORD_LIMIT
-            ny = (final_y / WARPED_SIZE) * -COORD_LIMIT
-            
-            # Down/Up判定 (簡易)
-            # 実際にはSideカメラのキャリブレーション値が必要だが、動画解析では相対変化を見る等で対応
-            is_touching = (pt_side is not None) # 色が見えていればタッチとみなす(仮)
-            
-            evt = 'move'
-            if is_touching and not is_down:
-                is_down = True
-                stroke_id += 1
-                evt = 'down'
-            elif not is_touching and is_down:
-                is_down = False
-                evt = 'up'
-            
-            if is_touching:
-                csv_data.append({
-                    'timestamp': frame_idx/30.0,
-                    'event_type': evt,
-                    'stroke_id': stroke_id,
-                    'x': f"{nx:.2f}",
-                    'y': f"{ny:.2f}",
-                    'pressure': pressure,
-                    'corrected': corrected
-                })
+        if cv2.waitKey(1) & 0xFF == 27: # Esc
+            if TOP_COLOR_LOWER is None:
+                print("警告: 色が設定されていません。")
+            else:
+                break
+                
+    cv2.destroyAllWindows()
+    print("--- 色設定完了 ---")
 
-    # 保存
-    out_csv = f"{base_path}_color_analyzed.csv"
-    if csv_data:
-        with open(out_csv, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=csv_data[0].keys())
-            writer.writeheader()
-            writer.writerows(csv_data)
-        print(f"完了: {out_csv}")
+def track_color_blob(frame, lower, upper):
+    """指定した色の重心を見つける"""
+    if lower is None or upper is None: return None
+    
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, lower, upper)
+    
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, KERNEL_OPEN)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, KERNEL_CLOSE)
+    
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if contours:
+        c = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(c) > 50:
+            M = cv2.moments(c)
+            if M["m00"] != 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                return (cx, cy)
+    return None
 
-    cap.release()
+def get_marker_point(target_id, detected_ids, detected_corners):
+    if detected_ids is not None:
+        for i, marker_id in enumerate(detected_ids.flatten()):
+            if marker_id == target_id:
+                return detected_corners[i][0][CORNER_INDEX_MAP[target_id]].astype(int)
+    return None
+
+def load_lens_calibration(file_path, frame_size_wh):
+    global TOP_CAM_MAP_X, TOP_CAM_MAP_Y
+    if os.path.exists(file_path):
+        try:
+            with np.load(file_path) as data:
+                mtx, dist = data['mtx'], data['dist']
+                w, h = frame_size_wh
+                new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w, h), 1, (w, h))
+                TOP_CAM_MAP_X, TOP_CAM_MAP_Y = cv2.initUndistortRectifyMap(mtx, dist, None, new_mtx, (w, h), cv2.CV_32FC1)
+                print("レンズ補正データを読み込みました。")
+        except: pass
+
+def convert_to_custom_coords(norm_x, norm_y):
+    norm_x_01 = norm_x / WARPED_SIZE
+    norm_y_01 = norm_y / WARPED_SIZE
+    return (norm_x_01 - 1.0) * COORD_LIMIT, norm_y_01 * -COORD_LIMIT
+
+def get_cell_id(norm_x, norm_y):
+    cx = int(norm_x // CELL_SIZE_PX)
+    cy = int(norm_y // CELL_SIZE_PX)
+    return (max(0, min(cy, GRID_SIZE - 1)) * GRID_SIZE) + max(0, min(cx, GRID_SIZE - 1))
+
+def record_data(event_type, timestamp, pressure, pen_pos_norm):
+    global last_record_time, last_cell_id, stroke_count
+    
+    if event_type == 'move' and timestamp - last_record_time < SAMPLING_INTERVAL:
+        return
+    last_record_time = timestamp
+
+    norm_x, norm_y = pen_pos_norm
+    x, y = convert_to_custom_coords(norm_x, norm_y)
+    cell_id = get_cell_id(norm_x, norm_y)
+    
+    drawing_data.append({
+        'timestamp': timestamp, 'event_type': event_type, 'stroke_id': stroke_count,
+        'x': f"{x:.2f}", 'y': f"{y:.2f}", 'pressure': f"{pressure:.4f}", 'cell_id': cell_id
+    })
+    last_cell_id = cell_id if event_type != 'up' else -1
+
+def save_csv():
+    if not drawing_data: return
+    print("CSV保存中...")
+    filename = f"unpitsu_hybrid_{int(time.time())}.csv"
+    with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.DictWriter(f, fieldnames=drawing_data[0].keys())
+        writer.writeheader()
+        writer.writerows(drawing_data)
+    print(f"保存完了: {filename}")
+
+# --- メイン処理 ---
+def main():
+    global is_recording_session, is_pen_down, is_area_locked, stroke_count, M_locked, M_live
+    global Z_TOUCH_HEIGHT, Z_PRESS_MAX_HEIGHT, is_z_calibrated
+
+    if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
+
+    # 1. カメラ初期化
+    top_idx = select_camera_index("Top-Down Camera (XY - Color)")
+    if top_idx is None: return
+    side_idx = select_camera_index("Side-View Camera (Z - MediaPipe)")
+    if side_idx is None: return
+
+    cap_top = cv2.VideoCapture(top_idx)
+    cap_side = cv2.VideoCapture(side_idx)
+    
+    for cap in [cap_top, cap_side]:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+    # レンズ補正読み込み
+    load_lens_calibration(LENS_CALIB_FILE_NAME, (1280, 720))
+
+    # 2. Topカメラの色設定 (SideはMediaPipeなので不要)
+    setup_top_color_tracking(cap_top)
+
+    # 録画用ライター
+    writer_top = None
+    writer_side = None
+    
+    print("\n--- メインループ開始 ---")
+    print(" [l]: エリアロック (Top: ArUco 0-3)")
+    print(" [z]: 筆圧0 (軽くタッチ) - Sideカメラの指位置で設定")
+    print(" [m]: 筆圧8 (強く押す) - Sideカメラの指位置で設定")
+    print(" [s]: 記録/録画 開始・停止")
+    print(" [v]: 完成画像の撮影")
+    print(" [q]: 終了")
+
+    dst_pts = np.float32([[0, 0], [WARPED_SIZE, 0], [WARPED_SIZE, WARPED_SIZE], [0, WARPED_SIZE]])
+
+    while True:
+        ret_top, frame_top = cap_top.read()
+        ret_side, frame_side = cap_side.read()
+        if not ret_top or not ret_side: break
+
+        # 歪み補正 (Top)
+        if TOP_CAM_MAP_X is not None:
+            frame_top = cv2.remap(frame_top, TOP_CAM_MAP_X, TOP_CAM_MAP_Y, cv2.INTER_LINEAR)
+
+        current_time = time.time()
+
+        # --- Top: ArUco エリア検出 ---
+        corners, ids, _ = DETECTOR.detectMarkers(frame_top)
+        if ids is not None: aruco.drawDetectedMarkers(frame_top, corners, ids)
+        
+        src_pts = [get_marker_point(id, ids, corners) for id in CORNER_IDS]
+        if all(pt is not None for pt in src_pts):
+            M_live = cv2.getPerspectiveTransform(np.float32(src_pts), dst_pts)
+            cv2.polylines(frame_top, [np.float32(src_pts).astype(int)], True, (0, 255, 0), 2)
+        
+        M_use = M_locked if is_area_locked else M_live
+
+        # --- Top: 色トラッキング (XY) ---
+        pen_center_top = track_color_blob(frame_top, TOP_COLOR_LOWER, TOP_COLOR_UPPER)
+        pen_pos_norm = None
+        
+        if pen_center_top:
+            cv2.circle(frame_top, pen_center_top, 10, (0, 255, 255), -1)
+            if M_use is not None:
+                # 射影変換
+                pt = np.array([[[pen_center_top[0], pen_center_top[1]]]], dtype=np.float32)
+                warped = cv2.perspectiveTransform(pt, M_use)
+                pen_pos_norm = (warped[0][0][0], warped[0][0][1])
+
+        # --- Side: MediaPipe (Z/筆圧) ---
+        frame_side_rgb = cv2.cvtColor(frame_side, cv2.COLOR_BGR2RGB)
+        results_side = hands_side.process(frame_side_rgb)
+        
+        current_pressure = 0
+        is_touching = False
+        pen_y_side = -1
+        
+        if results_side.multi_hand_landmarks:
+            # 最初の手を使用
+            hand_landmarks = results_side.multi_hand_landmarks[0]
+            # 描画
+            mp_drawing.draw_landmarks(frame_side, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            
+            # 親指の先端 (THUMB_TIP) を使用
+            thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+            h, w, _ = frame_side.shape
+            pen_y_side = int(thumb_tip.y * h)
+            px_side = int(thumb_tip.x * w)
+            
+            # 座標表示
+            cv2.circle(frame_side, (px_side, pen_y_side), 8, (255, 0, 0), -1)
+            cv2.putText(frame_side, f"Y={pen_y_side}", (px_side+10, pen_y_side), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,0,0), 2)
+
+            # 筆圧計算
+            if is_z_calibrated:
+                if pen_y_side < Z_TOUCH_HEIGHT:
+                    current_pressure = 0
+                    is_touching = False
+                else:
+                    is_touching = True
+                    # 0-8にマッピング
+                    rng = max(1, Z_PRESS_MAX_HEIGHT - Z_TOUCH_HEIGHT)
+                    val = (pen_y_side - Z_TOUCH_HEIGHT) / rng
+                    current_pressure = min(8, max(0, int(val * 8)))
+
+        # --- 記録ロジック ---
+        if is_recording_session:
+            # 録画保存
+            if writer_top: writer_top.write(frame_top)
+            if writer_side: writer_side.write(frame_side)
+            
+            # CSV記録 (Top座標があり、かつSideで手が検出されている場合)
+            if pen_pos_norm is not None:
+                if is_touching and not is_pen_down:
+                    is_pen_down = True
+                    stroke_count += 1
+                    record_data('down', current_time, current_pressure, pen_pos_norm)
+                elif is_touching and is_pen_down:
+                    record_data('move', current_time, current_pressure, pen_pos_norm)
+                elif not is_touching and is_pen_down:
+                    is_pen_down = False
+                    record_data('up', current_time, 0, pen_pos_norm)
+
+            cv2.putText(frame_top, "REC", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+
+        # --- UI表示 ---
+        if is_z_calibrated:
+            cv2.line(frame_side, (0, Z_TOUCH_HEIGHT), (1280, Z_TOUCH_HEIGHT), (0,255,0), 2)
+            cv2.line(frame_side, (0, Z_PRESS_MAX_HEIGHT), (1280, Z_PRESS_MAX_HEIGHT), (0,0,255), 2)
+
+        cv2.imshow("Top View (Color Track)", frame_top)
+        cv2.imshow("Side View (MediaPipe)", frame_side)
+
+        # --- キー操作 ---
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+        
+        if key == ord('l'):
+            if M_live is not None:
+                M_locked = M_live
+                is_area_locked = True
+                print("Area Locked.")
+            else:
+                is_area_locked = False
+                M_locked = None
+                print("Area Unlocked.")
+
+        # z/m キー: 現在の MediaPipe Y座標 をセット
+        if key == ord('z') and pen_y_side != -1:
+            Z_TOUCH_HEIGHT = pen_y_side
+            print(f"筆圧0設定 (MediaPipe): Y={Z_TOUCH_HEIGHT}")
+            if Z_PRESS_MAX_HEIGHT != -1: is_z_calibrated = True
+
+        if key == ord('m') and pen_y_side != -1:
+            Z_PRESS_MAX_HEIGHT = pen_y_side
+            print(f"筆圧8設定 (MediaPipe): Y={Z_PRESS_MAX_HEIGHT}")
+            if Z_TOUCH_HEIGHT != -1: is_z_calibrated = True
+
+        if key == ord('s'):
+            if not is_recording_session:
+                if is_area_locked and is_z_calibrated:
+                    # 録画開始
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    session_path = os.path.join(OUTPUT_DIR, f"session_{ts}")
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    writer_top = cv2.VideoWriter(f"{session_path}_top.mp4", fourcc, 20.0, (1280, 720))
+                    writer_side = cv2.VideoWriter(f"{session_path}_side.mp4", fourcc, 20.0, (1280, 720))
+                    
+                    is_recording_session = True
+                    print("記録開始")
+                else:
+                    print("エラー: エリアロックと筆圧設定(z/m)を完了してください。")
+            else:
+                is_recording_session = False
+                if writer_top: writer_top.release()
+                if writer_side: writer_side.release()
+                print("記録停止 -> CSV保存")
+                save_csv()
+                print("★ [v]キーで完成画像を保存してください。")
+
+        if key == ord('v'): # キャプチャ
+            if M_locked is not None:
+                warped = cv2.warpPerspective(frame_top, M_locked, (WARPED_SIZE, WARPED_SIZE))
+                cv2.imwrite(CAPTURE_IMAGE_FILENAME, warped)
+                print(f"完成画像を保存: {CAPTURE_IMAGE_FILENAME}")
+
+    cap_top.release()
     cap_side.release()
+    hands_side.close()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    analyze()
+    main()
