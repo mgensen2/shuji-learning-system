@@ -1,412 +1,507 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
-import re
+from tkinter import filedialog, messagebox, ttk
+import csv
 import math
-import random # 描画のためにランダム値を使用
+import copy
 
-# --- 1. 永字八法コマンド変換レシピ（補間ターゲット値） --- (省略。前回のコードと同じ)
-# ... [EIGHT_STROKES 辞書は前回のコードを参照] ...
+# --- 1. 永字八法レシピ ---
 EIGHT_STROKES = {
     "側 (点)": {
-        "Type": "A2", "V_adj": 2, "Special": {},
-        "V": (15, 15), "F": (2000, 2000), "W": (200, 200)
+        "Type": "A2",
+        "Start": {"V_diff": 15.0, "F": 2000, "W": 200},
+        "End":   {"V_diff": 15.0, "F": 2000, "W": 200},
+        "Special": {}
     },
     "勒 (横画)": {
-        "Type": "B2", "V_adj": 0, "Special": {"END_A3": True},
-        "V": (-5, -5), "F": (500, 500), "W": (300, 300)
+        "Type": "B2",
+        "Start": {"V_diff": -5.0, "F": 500, "W": 300},
+        "End":   {"V_diff": -5.0, "F": 500, "W": 300},
+        "Special": {"END_A3": True}
     },
     "努 (縦画)": {
-        "Type": "B2", "V_adj": 2, "Special": {"END_A3": True},
-        "V": (5, 5), "F": (300, 300), "W": (500, 500)
+        "Type": "B2",
+        "Start": {"V_diff": 5.0, "F": 300, "W": 500},
+        "End":   {"V_diff": 5.0, "F": 300, "W": 500},
+        "Special": {"END_A3": True}
     },
     "趯 (跳ね)": {
-        "Type": "B2", "V_adj": 2, "Special": {"END_A3": True},
-        "V": (10, 20), "F": (2000, 4000), "W": (1000, 1500)
+        "Type": "B2",
+        "Start": {"V_diff": 10.0, "F": 2000, "W": 1000},
+        "End":   {"V_diff": 20.0, "F": 4000, "W": 1500},
+        "Special": {"END_A3": True}
     },
     "策 (短横画)": {
-        "Type": "A2", "V_adj": 0, "Special": {},
-        "V": (-10, -10), "F": (1500, 1500), "W": (500, 500)
+        "Type": "A2",
+        "Start": {"V_diff": -10.0, "F": 1500, "W": 500},
+        "End":   {"V_diff": -10.0, "F": 1500, "W": 500},
+        "Special": {}
     },
     "掠 (左はらい)": {
-        "Type": "B2", "V_adj": 1, "Special": {"END_A3": True},
-        "V": (10, -15), "F": (700, 1500), "W": (1200, 1200)
+        "Type": "A2", 
+        "Start": {"V_diff": 10.0, "F": 700, "W": 1200},
+        "End":   {"V_diff": -15.0, "F": 1500, "W": 1200},
+        "Special": {"END_A3": True}
     },
     "啄 (短いはらい)": {
-        "Type": "A2", "V_adj": 2, "Special": {},
-        "V": (15, 15), "F": (2500, 2500), "W": (400, 400)
+        "Type": "A2",
+        "Start": {"V_diff": 15.0, "F": 2500, "W": 400},
+        "End":   {"V_diff": 15.0, "F": 2500, "W": 400},
+        "Special": {}
     },
     "磔 (右はらい)": {
-        "Type": "B2", "V_adj": 0, "Special": {"END_A3": True, "D1_INSERT_POS": 0.6},
-        "PHASE1": {"V": (-10, 5), "F": (600, 600), "W": (300, 300)},
-        "PHASE2": {"V": (5, 20), "F": (1500, 1500), "W": (1000, 1000)}
+        "Type": "A2", 
+        "Start": {"V_diff": -10.0, "F": 600, "W": 300},
+        "End":   {"V_diff": 20.0, "F": 1500, "W": 1000},
+        "Special": {"SPLIT_D1": True, "END_A3": True}
     }
 }
 
-# --- 2. メインアプリケーションクラス ---
-class EijiHappouEnhancer(tk.Tk):
+DEFAULT_VAL1 = 130
+DEFAULT_VAL3 = 250
+DEFAULT_VAL4 = 2
+
+class PlotterCsvEnhancer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("永字八法エンハンサー (GUI版)")
+        self.title("プロッタ用 永字八法エンハンサー (選択範囲強調表示)")
+        self.geometry("1200x800")
+
+        self.CANVAS_WIDTH = 600
+        self.CANVAS_HEIGHT = 600
+        self.COORD_LIMIT = 200.0 # -200 ~ 0
         
-        # --- ★修正: 定数/インスタンス変数の定義を冒頭に移動★ ---
-        self.CANVAS_WIDTH = 500
-        self.CANVAS_HEIGHT = 400
-        self.INITIAL_X = 50
-        self.INITIAL_Y = 50
-        self.MAX_VOLUME = 100 
-        self.MIN_VOLUME = 10
-        self.MAX_LINE_WIDTH = 8
-        self.MIN_LINE_WIDTH = 2
-        self.MAX_FREQ = 4000
-        self.MIN_FREQ = 300
-        # ---------------------------------------------------
+        self.rows = []
+        self.headers = []
         
-        self.original_commands = []
-        self.enhanced_commands = []
-        
+        # 行インデックス -> CanvasアイテムID のマッピング
+        self.line_ids = {} 
+
         self.create_widgets()
+
     def create_widgets(self):
-        # ... [前回のコードと同じファイル操作・設定エリアのコード] ...
-        # (前回の create_widgets メソッドの内容を貼り付け、以下の変更を加える)
+        left_frame = tk.Frame(self, padx=10, pady=10, width=450)
+        left_frame.pack(side="left", fill="y")
         
-        # --- 既存コード貼り付け位置 ---
+        right_frame = tk.Frame(self, padx=10, pady=10)
+        right_frame.pack(side="right", fill="both", expand=True)
 
-        # メインフレーム
-        main_frame = tk.Frame(self, padx=10, pady=10)
-        main_frame.pack()
-
-        # ファイル操作エリア
-        file_frame = tk.LabelFrame(main_frame, text="1. ファイル操作", padx=5, pady=5)
+        # --- 1. ファイル操作 ---
+        file_frame = tk.LabelFrame(left_frame, text="1. ファイル操作", padx=5, pady=5)
         file_frame.pack(fill="x", pady=5)
-        tk.Button(file_frame, text="元のノイズファイルを開く", command=self.load_file).pack(side="left", padx=5)
-        self.file_status = tk.Label(file_frame, text="ファイル未読み込み")
-        self.file_status.pack(side="left", padx=10)
         
-        # Cコマンド設定エリア
-        c_frame = tk.LabelFrame(main_frame, text="2. Cコマンドデフォルト設定", padx=5, pady=5)
-        c_frame.pack(fill="x", pady=5)
-        tk.Label(c_frame, text="F (Hz):").pack(side="left"); self.c_f = tk.Entry(c_frame, width=8); self.c_f.insert(0, "1000"); self.c_f.pack(side="left", padx=5)
-        tk.Label(c_frame, text="W (Hz):").pack(side="left"); self.c_w = tk.Entry(c_frame, width=8); self.c_w.insert(0, "500"); self.c_w.pack(side="left", padx=5)
-        tk.Label(c_frame, text="V_adj (0/1/2):").pack(side="left"); self.c_v_adj = tk.Entry(c_frame, width=5); self.c_v_adj.insert(0, "0"); self.c_v_adj.pack(side="left", padx=5)
+        btn_frame = tk.Frame(file_frame)
+        btn_frame.pack(fill="x")
+        tk.Button(btn_frame, text="CSVを開く", command=self.load_csv, bg="#ddd").pack(side="left", padx=5)
+        tk.Button(btn_frame, text="CSV保存", command=self.save_csv, bg="#ddd").pack(side="left", padx=5)
+        
+        tk.Button(file_frame, text="TXT保存 (プロッタ用)", command=self.save_txt_for_plotter, bg="#FF9800", fg="white").pack(fill="x", padx=5, pady=5)
+        
+        self.lbl_status = tk.Label(file_frame, text="未読み込み")
+        self.lbl_status.pack(anchor="w", padx=5)
 
-        # --- 新しいキャンバスエリア ---
-        canvas_frame = tk.LabelFrame(main_frame, text="運筆軌跡表示 (太さ:ボリューム, 色:周波数)", padx=5, pady=5)
-        canvas_frame.pack(fill="x", pady=5)
-        self.canvas = tk.Canvas(canvas_frame, width=self.CANVAS_WIDTH, height=self.CANVAS_HEIGHT, bg="white", borderwidth=2, relief="sunken")
-        self.canvas.pack()
-        # -----------------------------
+        # --- 2. データリスト ---
+        list_frame = tk.LabelFrame(left_frame, text="2. データ選択 (ストローク単位)", padx=5, pady=5)
+        list_frame.pack(fill="both", expand=True, pady=5)
         
-        # 運筆変換エリア
-        convert_frame = tk.LabelFrame(main_frame, text="3. 運筆変換設定", padx=5, pady=5)
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side="right", fill="y")
+        self.listbox = tk.Listbox(list_frame, selectmode="extended", yscrollcommand=scrollbar.set, font=("Consolas", 10))
+        self.listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.listbox.yview)
+        
+        # ★ 選択イベントのバインド
+        self.listbox.bind('<<ListboxSelect>>', self.on_select_list)
+
+        # --- 3. 技法適用 ---
+        convert_frame = tk.LabelFrame(left_frame, text="3. 永字八法 適用", padx=5, pady=5)
         convert_frame.pack(fill="x", pady=5)
-
-        tk.Label(convert_frame, text="始点 (行No.):").pack(side="left"); self.start_line = tk.Entry(convert_frame, width=5); self.start_line.pack(side="left", padx=5)
-        tk.Label(convert_frame, text="終点 (行No.):").pack(side="left"); self.end_line = tk.Entry(convert_frame, width=5); self.end_line.pack(side="left", padx=5)
 
         tk.Label(convert_frame, text="技法:").pack(side="left")
         self.stroke_var = tk.StringVar(self)
-        self.stroke_var.set("勒 (横画)")
+        self.stroke_var.set(list(EIGHT_STROKES.keys())[0])
         stroke_menu = tk.OptionMenu(convert_frame, self.stroke_var, *EIGHT_STROKES.keys())
         stroke_menu.pack(side="left", padx=5)
 
-        tk.Button(convert_frame, text="⚡ 変換実行", command=self.apply_enhancement, bg="#4CAF50", fg="white").pack(side="left", padx=10)
+        tk.Button(convert_frame, text="適用", command=self.apply_enhancement, bg="#4CAF50", fg="white").pack(side="left", padx=10)
 
-        # ログ/出力エリア
-        output_frame = tk.LabelFrame(main_frame, text="4. 変換コマンドログ", padx=5, pady=5)
-        output_frame.pack(fill="both", expand=True, pady=5)
+        # --- 4. キャンバス ---
+        self.canvas = tk.Canvas(right_frame, bg="white", width=self.CANVAS_WIDTH, height=self.CANVAS_HEIGHT)
+        self.canvas.pack(fill="both", expand=True)
         
-        self.log_text = tk.Text(output_frame, height=10, width=60) # 高さを調整
-        self.log_text.pack(side="left", fill="both", expand=True)
-        
-        tk.Button(output_frame, text="✅ ファイル保存", command=self.save_file).pack(side="bottom", fill="x", pady=5)
+        legend_frame = tk.Frame(right_frame)
+        legend_frame.pack(fill="x")
+        # 座標説明を更新
+        tk.Label(legend_frame, text="凡例: 線色=速度(青→赤), 選択中=水色強調, 座標:右上が原点(0,0), 左下が(-200,-200)").pack()
 
+    def load_csv(self):
+        filepath = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if not filepath: return
 
-    # --- 3. ファイル操作メソッド --- (変更なし)
-    def load_file(self):
-        # ... [既存の load_file メソッドの内容] ...
-        filepath = filedialog.askopenfilename(
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if not filepath:
-            return
-
-        with open(filepath, 'r', encoding='utf-8') as f:
-            self.original_commands = [line.strip() for line in f if line.strip()]
-        
-        self.enhanced_commands = list(self.original_commands)
-        self.file_status.config(text=f"ファイル読み込み完了 ({len(self.original_commands)}行)")
-        self.display_commands(self.enhanced_commands)
-        
-        # ★ 軌跡の初期描画を追加 ★
-        self.draw_trajectory(self.enhanced_commands)
-        messagebox.showinfo("情報", "ファイルを読み込みました。\n行番号を確認し、変換範囲を指定してください。")
-        
-    def save_file(self):
-        # ... [既存の save_file メソッドの内容] ...
-        if not self.enhanced_commands:
-            messagebox.showerror("エラー", "変換対象のコマンドがありません。")
-            return
-
-        filepath = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt")]
-        )
-        if not filepath:
-            return
-        
-        c_command = f"C {self.c_f.get()} {self.c_w.get()} {self.c_v_adj.get()}"
-        output_data = [c_command] + self.enhanced_commands
-
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(output_data))
-        
-        messagebox.showinfo("成功", f"コマンドをファイルに保存しました:\n{filepath}")
-
-    def display_commands(self, commands):
-        # ... [既存の display_commands メソッドの内容] ...
-        self.log_text.delete(1.0, tk.END)
-        for i, cmd in enumerate(commands):
-            self.log_text.insert(tk.END, f"{i+1:03d}: {cmd}\n")
-            
-    # --- 4. コマンド変換ロジック（コア） --- (変更なし、適用後に描画を追加)
-    def apply_enhancement(self):
-        # ... [既存の apply_enhancement メソッドの内容] ...
         try:
-            # ... [前回のロジック：入力チェック、ターゲットコマンド抽出、補間ロジック実行、コマンド置き換え] ...
+            with open(filepath, 'r', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                self.headers = reader.fieldnames
+                self.rows = [row for row in reader]
             
-            # (前回の apply_enhancement の処理をコピーし、以下を追加)
-            
-            # --- ここに前回の apply_enhancement の内容が入る ---
-            
-            # 入力チェック
-            if not self.enhanced_commands:
-                raise ValueError("ファイルを読み込んでください。")
-            
-            start_idx = int(self.start_line.get()) - 1
-            end_idx = int(self.end_line.get()) - 1
-            stroke_name = self.stroke_var.get()
-
-            if not (0 <= start_idx <= end_idx < len(self.enhanced_commands)):
-                raise ValueError("無効な行番号の範囲です。")
-
-            target_cmds = self.enhanced_commands[start_idx : end_idx + 1]
-            stroke_data = EIGHT_STROKES[stroke_name]
-            
-            total_duration = 0
-            
-            parsed_params = []
-            for cmd in target_cmds:
-                match = re.match(r'(A1|B1)\s+(\d+)\s+(\d+)\s+(\d+)', cmd)
-                # A2/B2の形式でフィルタ設定が省略されていないコマンドを処理
-                match_a2b2 = re.match(r'(A2|B2)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)', cmd)
+            for row in self.rows:
+                if 'Command' not in row and 'event_type' in row:
+                    evt = row['event_type']
+                    row['Command'] = 'A1' if evt == 'move' else 'A0'
                 
-                if match:
-                    cmd_type, speaker, duration, volume = match.groups()
-                    duration, volume = int(duration), int(volume)
-                    total_duration += duration
-                    parsed_params.append({'S': speaker, 'T': duration, 'V': volume})
-                elif match_a2b2:
-                    # 既に変換済みのコマンドを再変換しようとした場合、エラーとするかスキップするか選択
-                    raise ValueError(f"範囲内に既にA2/B2形式のコマンドが含まれています。A1/B1のみを選択してください。: {cmd}")
-                else:
-                    raise ValueError(f"範囲内にA1/B1形式ではないコマンドが含まれています: {cmd}")
+                for k in ['X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID']:
+                    val = None
+                    for key_candidate in [k, k.lower(), k.upper()]:
+                        if key_candidate in row:
+                            val = row[key_candidate]
+                            break
+                    
+                    if val is not None and val != '':
+                        try:
+                            row[k] = float(val)
+                        except: pass
+                
+                if 'Z_orig' not in row:
+                    row['Z_orig'] = row.get('Z', 0.0)
+                
+                if 'SpeakerParams' not in row:
+                    row['SpeakerParams'] = f"{DEFAULT_VAL1} 300 {DEFAULT_VAL3} {DEFAULT_VAL4}" 
+                
+                if 'SpkCmdType' not in row:
+                    row['SpkCmdType'] = 'A2'
 
-            if total_duration == 0:
-                raise ValueError("選択範囲の合計再生時間が0msです。")
-
-            # 新しいコマンドシーケンスの生成
-            new_commands = self._generate_enhanced_commands(stroke_name, stroke_data, parsed_params, total_duration)
-
-            # コマンドの置き換え
-            self.enhanced_commands[start_idx : end_idx + 1] = new_commands
-
-            messagebox.showinfo("成功", f"'{stroke_name}' の運筆を適用しました。")
-            self.display_commands(self.enhanced_commands)
-            
-            # ★ 軌跡の再描画を追加 ★
-            self.draw_trajectory(self.enhanced_commands)
-
+            self.lbl_status.config(text=f"{len(self.rows)}行")
+            self.draw_trajectory() # 先に描画してIDマップを作る
+            self.update_listbox()
+            messagebox.showinfo("成功", "CSVを読み込みました。")
         except Exception as e:
             messagebox.showerror("エラー", str(e))
-            
-    # ... [既存の _interpolate, _generate_enhanced_commands メソッドの内容] ...
-    def _interpolate(self, start_val, end_val, current_pos):
-        # ... [既存の _interpolate の内容] ...
-        return round(start_val + (end_val - start_val) * current_pos)
 
-    def _generate_enhanced_commands(self, stroke_name, stroke_data, params, total_duration):
-        # ... [既存の _generate_enhanced_commands の内容] ...
-        # (前回のコードからコピーして使用してください)
+    def save_csv(self):
+        if not self.rows: return
+        filepath = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if not filepath: return
+
+        try:
+            output_headers = ['Command', 'X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID', 'SpeakerParams', 'SpkCmdType', 'Z_orig']
+            
+            with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=output_headers, extrasaction='ignore')
+                writer.writeheader()
+                for row in self.rows:
+                    out_row = {}
+                    for k in output_headers:
+                        val = row.get(k, '')
+                        if isinstance(val, float):
+                            if k in ['X', 'Y', 'Z', 'Z_orig']: val = f"{val:.2f}"
+                            else: val = f"{int(val)}"
+                        out_row[k] = val
+                    writer.writerow(out_row)
+            messagebox.showinfo("成功", "CSVを保存しました。")
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+
+    def save_txt_for_plotter(self):
+        if not self.rows: return
+        filepath = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+        if not filepath: return
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                for row in self.rows:
+                    cmd = row.get('Command', 'A0')
+                    
+                    x = row.get('X', 0.0)
+                    y = row.get('Y', 0.0)
+                    z = row.get('Z', 0.0)
+                    f_val = row.get('F', '')
+                    delay_ms = row.get('Delay_ms', '')
+                    cell_id = int(row.get('Cell_ID', 0))
+                    
+                    speaker_params = row.get('SpeakerParams', f"{DEFAULT_VAL1} 100 {DEFAULT_VAL3} {DEFAULT_VAL4}")
+                    spk_type = row.get('SpkCmdType', 'A2')
+
+                    spk_delay = int(delay_ms) if delay_ms != '' and delay_ms > 0 else 100
+                    spk_cmd = f"{spk_type} {cell_id} {spk_delay} {speaker_params}"
+
+                    if cmd in ['A0', 'G0']:
+                        f.write(f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f}\n")
+                        f.write(f"S {spk_cmd}\n") 
+                        
+                    elif cmd in ['A1', 'G1']: 
+                        line = f"G1 X{x:.2f} Y{y:.2f} Z{z:.2f}"
+                        if f_val != '':
+                            line += f" F{int(f_val)}"
+                        line += f"\t{spk_cmd}" 
+                        f.write(line + "\n")
+                        
+                    elif cmd == 'D1':
+                        if delay_ms != '':
+                            f.write(f"D1 {int(delay_ms)}\n")
+                    
+                    elif cmd == 'A3':
+                        f.write("A3\n")
+
+            messagebox.showinfo("成功", f"プロッタ用TXTファイルを保存しました。\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+
+    def _interpolate(self, start_val, end_val, progress):
+        return start_val + (end_val - start_val) * progress
+
+    def apply_enhancement(self):
+        selection = self.listbox.curselection()
+        if not selection:
+            messagebox.showwarning("警告", "変換したい範囲を選択してください。")
+            return
+
+        stroke_name = self.stroke_var.get()
+        recipe = EIGHT_STROKES[stroke_name]
         
-        new_cmds = []
-        elapsed_time = 0
-        is_split_stroke = (stroke_name == "磔 (右はらい)")
+        indices = sorted(list(selection))
         
-        if is_split_stroke:
-            D1_pos = stroke_data['Special']['D1_INSERT_POS']
-            phase1_duration = total_duration * D1_pos
-            D1_inserted = False
-            
-            targets = stroke_data['PHASE1']
-            V_start, V_end = targets['V']
-            F_start, F_end = targets['F']
-            W_start, W_end = targets['W']
-        else:
-            V_start, V_end = stroke_data['V']
-            F_start, F_end = stroke_data['F']
-            W_start, W_end = stroke_data['W']
-
-        V_adj = stroke_data['V_adj']
-        cmd_type = stroke_data['Type']
-
-        for i, p in enumerate(params):
-            duration = p['T']
-            elapsed_time += duration
-            
-            if is_split_stroke and elapsed_time > phase1_duration and not D1_inserted:
-                
-                new_cmds.append("D1 300")
-                D1_inserted = True
-
-                targets = stroke_data['PHASE2']
-                V_start, V_end = targets['V']
-                F_start, F_end = targets['F']
-                W_start, W_end = targets['W']
-
-                phase2_elapsed_time = elapsed_time - (total_duration * D1_pos)
-                phase2_total_duration = total_duration * (1 - D1_pos)
-                
-                current_time_pos = phase2_elapsed_time / phase2_total_duration
-            
-            elif is_split_stroke and D1_inserted:
-                current_time_pos = (elapsed_time - (total_duration * D1_pos)) / (total_duration * (1 - D1_pos))
-            else:
-                current_time_pos = elapsed_time / total_duration
-
-            v_interp = self._interpolate(p['V'] + V_start, p['V'] + V_end, current_time_pos)
-            f_interp = self._interpolate(F_start, F_end, current_time_pos)
-            w_interp = self._interpolate(W_start, W_end, current_time_pos)
-            
-            new_cmd = (
-                f"{cmd_type} {p['S']} {duration} {v_interp} "
-                f"{f_interp} {w_interp} {V_adj}"
-            )
-            new_cmds.append(new_cmd)
-
-        if stroke_data['Special'].get("END_A3"):
-            new_cmds.append(f"A3 {params[0]['S']}")
-            
-        return new_cmds
-
-    # --- 5. 軌跡描画メソッド (新規追加) ---
-    
-    def get_color_from_freq(self, freq):
-        """周波数に基づいて色のRBG値を計算 (低F=青, 高F=赤)"""
-        # 正規化: [MIN_FREQ, MAX_FREQ] -> [0, 1]
-        norm_freq = (freq - self.MIN_FREQ) / (self.MAX_FREQ - self.MIN_FREQ)
-        norm_freq = max(0, min(1, norm_freq)) # 0から1の範囲にクリップ
-
-        # 青(0)から赤(1)へのグラデーション (H/S/VのVを固定した色相変化を簡略化)
-        # 低い周波数ほど青 (RGB: 00FFC0 -> 0000FF), 高い周波数ほど赤 (RGB: FF0000)
+        target_indices = [i for i in indices if self.rows[i].get('Command') in ['A1', 'G1']]
         
-        # 簡易的な青-緑-赤のグラデーション:
-        r = int(255 * norm_freq)       # Fが高くなるほどRが増加
-        g = int(255 * (1 - abs(norm_freq - 0.5) * 2)) # 中間(緑)でピーク
-        b = int(255 * (1 - norm_freq)) # Fが低くなるほどBが増加
+        if not target_indices:
+            messagebox.showwarning("警告", "選択範囲に描画コマンド(A1/G1)が含まれていません。")
+            return
+
+        total_duration = 0
+        durations = []
+        for i in target_indices:
+            d = self.rows[i].get('Delay_ms', 0)
+            if d == '': d = 0
+            d = float(d)
+            durations.append(d)
+            total_duration += d
         
-        return f'#{r:02x}{g:02x}{b:02x}'
+        if total_duration == 0: total_duration = 1
 
+        split_d1_inserted = False
+        current_time = 0
+        
+        processed_rows = [] 
+        
+        processed_rows.extend(self.rows[:indices[0]])
 
-    def draw_trajectory(self, commands):
+        for i, original_idx in enumerate(indices):
+            row = self.rows[original_idx]
+            cmd = row.get('Command')
+            
+            if cmd not in ['A1', 'G1']:
+                processed_rows.append(row)
+                continue
+            
+            t_idx = target_indices.index(original_idx)
+            duration = durations[t_idx]
+            
+            progress = (current_time + (duration / 2)) / total_duration
+            
+            if recipe["Special"].get("SPLIT_D1") and not split_d1_inserted:
+                if progress >= 0.60:
+                    d1_row = {
+                        'Command': 'D1',
+                        'Delay_ms': 500, 
+                        'X': row.get('X'), 'Y': row.get('Y'),
+                        'Z': 0, 'F': '', 'Cell_ID': row.get('Cell_ID'),
+                        'SpeakerParams': DEFAULT_SPEAKER_PARAMS
+                    }
+                    processed_rows.append(d1_row)
+                    split_d1_inserted = True
+            
+            start_p = recipe["Start"]
+            end_p = recipe["End"]
+            
+            v_diff = self._interpolate(start_p["V_diff"], end_p["V_diff"], progress)
+            z_orig = float(row.get('Z_orig', 0))
+            new_z = max(0.0, z_orig + v_diff) 
+            
+            new_w = self._interpolate(start_p["W"], end_p["W"], progress)
+            
+            row['Z'] = new_z
+            # F値は維持
+            row['SpkCmdType'] = recipe["Type"] 
+            
+            row['SpeakerParams'] = f"{DEFAULT_VAL1} {int(new_w)} {DEFAULT_VAL3} {DEFAULT_VAL4}"
+            
+            processed_rows.append(row)
+            
+            current_time += duration
+
+        if recipe["Special"].get("END_A3"):
+            a3_row = {
+                'Command': 'A3',
+                'X': processed_rows[-1].get('X'),
+                'Y': processed_rows[-1].get('Y'),
+                'Z': 0, 'F': '', 'Delay_ms': '',
+                'Cell_ID': processed_rows[-1].get('Cell_ID'),
+                'SpeakerParams': DEFAULT_SPEAKER_PARAMS
+            }
+            processed_rows.append(a3_row)
+
+        processed_rows.extend(self.rows[indices[-1]+1:])
+        
+        self.rows = processed_rows
+        
+        self.draw_trajectory()
+        self.update_listbox()
+        
+        messagebox.showinfo("完了", f"{stroke_name} を適用しました。")
+
+    def update_listbox(self):
+        self.listbox.delete(0, tk.END)
+        for i, row in enumerate(self.rows):
+            cmd = row.get('Command', '')
+            x = row.get('X', 0)
+            y = row.get('Y', 0)
+            z = row.get('Z', 0)
+            f = row.get('F', '')
+            f_str = f"{int(f)}" if f!='' and f is not None else ""
+            z_str = f"{float(z):.1f}"
+            
+            spk_type = row.get('SpkCmdType', '')
+            spk_params = row.get('SpeakerParams', '')
+            
+            prefix = ""
+            if cmd == 'D1': prefix = "[待機] "
+            if cmd == 'A3': prefix = "[停止] "
+            
+            txt = f"{i+1:03d}: {prefix}{cmd} | Z:{z_str} F:{f_str} | {spk_type} {spk_params}"
+            self.listbox.insert(tk.END, txt)
+            
+            if cmd in ['D1', 'A3']:
+                self.listbox.itemconfig(tk.END, {'bg': '#ffffe0'}) 
+
+    def on_select_list(self, event):
+        """リスト選択時にキャンバス上の対応する線を強調表示する"""
+        selected_indices = self.listbox.curselection()
+        if not selected_indices: return
+
+        # 全ての線を元の色に戻す
+        # (効率化のため、前回選択されていたものだけ戻すロジックも可だが、
+        #  ここではシンプルにdraw_trajectoryを呼ぶか、タグで管理する)
+        
+        # 今回はシンプルに、選択されたIDの線だけ色を変える
+        # self.line_ids には {row_index: canvas_item_id} が入っている
+        
+        # まず全リセット (描画処理自体が軽いので再描画でも良いが、色変更のみ行う)
+        # 描画時の色を保持していないと戻せないので、draw_trajectoryを再実行してリセットするのが確実
+        # ただし頻繁な再描画は重いので、タグを使って制御する
+        
+        self.canvas.dtag("selected", "selected") # 既存の選択タグを消す
+        
+        # ハイライト色
+        highlight_color = "#00FFFF" # 水色
+        
+        for idx in self.line_ids:
+            # 元の色に戻す処理が必要だが、元の色は動的に決まっているため
+            # ここでは「全再描画」し、その直後に「選択部分だけ上書き」する戦略を取る
+            # あるいは draw_trajectory 内で選択状態をチェックして描画する
+            pass
+
+        # 効率のため、draw_trajectoryに選択インデックスを渡して再描画させる
+        self.draw_trajectory(selected_indices)
+
+    def draw_trajectory(self, selected_indices=None):
         self.canvas.delete("all")
+        self.line_ids = {} # マッピング初期化
         
-        # 描画の基準座標
-        x, y = self.INITIAL_X, self.INITIAL_Y
-        prev_x, prev_y = x, y
+        # 座標系: 右上が原点(0,0), 左下が(-200, -200)
+        # Canvas: 左上が(0,0), 右下が(W,H)
+        # X: -200 -> 0 (0 -> W)
+        # Y: -200 -> 0 (H -> 0) ※YはCanvasと逆
         
-        # 描画の単位
-        # 100ms 再生を 10ピクセル移動と仮定 (描画スピードを時間で制御)
-        PIXELS_PER_100MS = 10 
+        scale_x = self.CANVAS_WIDTH / abs(self.COORD_LIMIT)
+        scale_y = self.CANVAS_HEIGHT / abs(self.COORD_LIMIT)
         
-        # 軌跡の方向を管理する（今回は簡易的に右下方向へ進める）
-        angle_rad = math.radians(45) # 45度の右下方向
+        # 少し余白を持たせる
+        scale_x *= 0.9
+        scale_y *= 0.9
+        offset_x = self.CANVAS_WIDTH * 0.05
+        offset_y = self.CANVAS_HEIGHT * 0.05
 
-        # コマンドを解析し描画
-        for cmd in commands:
-            # B2/A2コマンド（フィルタ設定付き）を解析
-            match_b2a2 = re.match(r'(A2|B2)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)', cmd)
-            # D1コマンドを解析
-            match_d1 = re.match(r'D1\s+(\d+)', cmd)
+        def to_canvas(cx, cy):
+            # cx: -200 ~ 0
+            # cy: -200 ~ 0
+            # x = (cx - (-200)) * scale = (cx + 200) * scale
+            x = (cx + 200) * scale_x + offset_x
+            # y = 0 -> 0, -200 -> H
+            # y = (-cy) * scale
+            y = (-cy) * scale_y + offset_y
             
-            if match_b2a2:
-                # B2/A2 [S] [T] [V] [F] [W] [V_adj]
-                T, V, F = map(int, match_b2a2.groups()[2:5])
-                
-                # 描画太さ (ボリューム V に比例)
-                V_clamped = max(self.MIN_VOLUME, min(self.MAX_VOLUME, V))
-                width = self.MIN_LINE_WIDTH + (self.MAX_LINE_WIDTH - self.MIN_LINE_WIDTH) * \
-                        ((V_clamped - self.MIN_VOLUME) / (self.MAX_VOLUME - self.MIN_VOLUME))
-                
-                # 描画色 (中心周波数 F に比例)
-                F_clamped = max(self.MIN_FREQ, min(self.MAX_FREQ, F))
-                color = self.get_color_from_freq(F_clamped)
+            # 原点(0,0)が右上に来るように反転が必要なら調整
+            # 現在のロジック:
+            # cx=-200 -> x=0 (左)
+            # cx=0    -> x=W (右)  OK
+            # cy=-200 -> y=H (下)
+            # cy=0    -> y=0 (上)  OK
+            
+            # 微調整: 右上(0,0) をキャンバスの右上に合わせる
+            # 上記式で cx=0, cy=0 は (W, 0) に近い場所になるはず
+            
+            return x, y
 
-                # 座標の移動 (時間 T に比例)
-                distance = T / 100 * PIXELS_PER_100MS
-                
-                # 簡易的な座標移動。本来は技法に応じて移動方向が変わる
-                # 例として、単純に右下に進めるか、ランダムな方向に進める
-                if '勒' in cmd or '策' in cmd: # 横画
-                     delta_x = distance
-                     delta_y = 0
-                elif '努' in cmd: # 縦画
-                     delta_x = 0
-                     delta_y = distance
-                elif '掠' in cmd: # 左下はらい
-                     delta_x = -distance * math.cos(math.radians(30))
-                     delta_y = distance * math.sin(math.radians(30))
-                else: # その他 (側、趯、磔など) や初期コマンド
-                     delta_x = distance * math.cos(angle_rad)
-                     delta_y = distance * math.sin(angle_rad)
-                
+        prev_x, prev_y = None, None
+        
+        # グリッド線 (オプション)
+        self.canvas.create_line(0, offset_y, self.CANVAS_WIDTH, offset_y, fill="#ddd") # Y=0
+        self.canvas.create_line(self.CANVAS_WIDTH-offset_x, 0, self.CANVAS_WIDTH-offset_x, self.CANVAS_HEIGHT, fill="#ddd") # X=0
+
+        for i, row in enumerate(self.rows):
+            cmd = row.get('Command')
+            if cmd not in ['A0', 'A1', 'D1', 'G0', 'G1', 'A3']: continue
+            
+            raw_x = float(row.get('X', 0))
+            raw_y = float(row.get('Y', 0))
+            x, y = to_canvas(raw_x, raw_y)
+            
+            # ハイライト判定
+            is_selected = selected_indices and (i in selected_indices)
+            
+            if cmd in ['A0', 'G0']:
                 prev_x, prev_y = x, y
-                x += delta_x
-                y += delta_y
-
-                # 軌跡の描画 (線)
-                self.canvas.create_line(prev_x, prev_y, x, y, 
+                
+            elif cmd in ['A1', 'G1']:
+                if prev_x is not None:
+                    z = float(row.get('Z', 0))
+                    f = row.get('F', 1000)
+                    if f == '': f = 1000
+                    f = float(f)
+                    
+                    width = max(1, z * 1.5)
+                    if is_selected:
+                        width += 2 # 太くする
+                    
+                    # 色決定
+                    if is_selected:
+                        color = "#00FFFF" # 水色 (Cyan)
+                    else:
+                        norm_f = min(1.0, max(0.0, (f - 300) / 3700))
+                        r = int(255 * norm_f)
+                        b = int(255 * (1 - norm_f))
+                        color = f"#{r:02x}00{b:02x}"
+                    
+                    line_id = self.canvas.create_line(prev_x, prev_y, x, y, 
                                         width=width, fill=color, capstyle=tk.ROUND)
+                    
+                    self.line_ids[i] = line_id # IDを保存
                 
-                # 点の強調 (勒、努、策以外の収筆)
-                if '側' in cmd or '啄' in cmd or '趯' in cmd or '磔' in cmd:
-                     self.canvas.create_oval(x-width/2, y-width/2, x+width/2, y+width/2, 
-                                             fill=color, outline=color)
-                     
-            elif match_d1:
-                # D1 (待機) の場合、座標は動かさないが、点で強調
                 prev_x, prev_y = x, y
-                self.canvas.create_oval(x-2, y-2, x+2, y+2, fill="black", outline="black")
+            
+            elif cmd == 'D1':
+                r = 3
+                fill_c = "red" if is_selected else "black"
+                self.canvas.create_oval(x-r, y-r, x+r, y+r, fill=fill_c, outline=fill_c)
+                prev_x, prev_y = x, y
                 
-            elif 'A3' in cmd:
-                # A3 (停止) の場合、収筆として点で強調
+            elif cmd == 'A3':
+                r = 4
+                fill_c = "#00FFFF" if is_selected else "red"
+                self.canvas.create_oval(x-r, y-r, x+r, y+r, fill=fill_c, outline=fill_c)
                 prev_x, prev_y = x, y
-                self.canvas.create_oval(x-3, y-3, x+3, y+3, fill="red", outline="red")
             
             else:
-                 # 未変換のA1/B1やその他のコマンドは細い線で表示
-                 distance = 10 # 仮想的な移動距離
                  prev_x, prev_y = x, y
-                 x += distance * math.cos(angle_rad)
-                 y += distance * math.sin(angle_rad)
-                 self.canvas.create_line(prev_x, prev_y, x, y, width=1, fill="gray")
-                 
-        # 描画の最終位置に小さな円を描画
-        self.canvas.create_oval(x-2, y-2, x+2, y+2, fill="black")
 
 if __name__ == "__main__":
-    # --- 前回のコードの _interpolate と _generate_enhanced_commands をコピーして使用してください ---
-    # (ここでは簡略化のため、既存のメソッド定義は省略しています)
-    
-    app = EijiHappouEnhancer()
+    app = PlotterCsvEnhancer()
     app.mainloop()
