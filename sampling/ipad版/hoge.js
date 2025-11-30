@@ -196,7 +196,7 @@ window.addEventListener('load', () => {
             // A. ストローク開始点への移動 (A0)
             const startPoint = points[0];
             plotterCommands.push({
-                mode: 'A0',
+                mode: 'G0',
                 x: startPoint.x,
                 y: startPoint.y,
                 z: 0,
@@ -297,7 +297,7 @@ window.addEventListener('load', () => {
                 const feed = (25 / (totalTimeDiff / 1000.0)) * 60;
 
                 plotterCommands.push({
-                    mode: 'A1',
+                    mode: 'G1',
                     x: p2.x,
                     y: p2.y,
                     z: p2.pressure,
