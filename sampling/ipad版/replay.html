@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>運筆データ 再現ツール</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #f0f0f0;
+            text-align: center;
+        }
+        #controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: inline-block;
+        }
+        input[type="file"] {
+            margin-right: 10px;
+        }
+        canvas {
+            background-color: #fff;
+            border: 1px solid #333;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-top: 10px;
+        }
+        .info {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>運筆データ 再現ツール</h1>
+
+    <div id="controls">
+        <label><strong>CSVファイルを選択:</strong></label>
+        <input type="file" id="csvFileInput" accept=".csv">
+        <button id="drawBtn">描画する</button>
+        <div class="info">※ unpitsu_data_full.csv を選択してください</div>
+    </div>
+
+    <div id="canvasContainer">
+        <canvas id="replayCanvas"></canvas>
+    </div>
+
+    <script src="replay.js"></script>
+</body>
+</html>
