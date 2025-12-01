@@ -5,6 +5,15 @@ import math
 import copy
 
 # --- 1. 永字八法レシピ ---
+# Type: ベースとなるコマンド (A2 or B2) -> 今回すべて A2 に統一
+# Start/End:
+#   V_diff: 元のZ値への加算値 (V = V_orig + V_diff)
+#   F: 速度 (維持するため使用しないが定義は残す)
+#   W: スピーカパラメータ Val2 (持続/変調)
+# Special:
+#   END_A3: 最後に A3 を挿入するか
+#   SPLIT_D1: 途中 (60%) で D1 を挿入するか (磔用)
+
 EIGHT_STROKES = {
     "側 (点)": {
         "Type": "A2",
@@ -13,19 +22,19 @@ EIGHT_STROKES = {
         "Special": {}
     },
     "勒 (横画)": {
-        "Type": "B2",
+        "Type": "A2", 
         "Start": {"V_diff": -5.0, "F": 500, "W": 300},
         "End":   {"V_diff": -5.0, "F": 500, "W": 300},
         "Special": {"END_A3": True}
     },
     "努 (縦画)": {
-        "Type": "B2",
+        "Type": "A2", 
         "Start": {"V_diff": 5.0, "F": 300, "W": 500},
         "End":   {"V_diff": 5.0, "F": 300, "W": 500},
         "Special": {"END_A3": True}
     },
     "趯 (跳ね)": {
-        "Type": "B2",
+        "Type": "A2", 
         "Start": {"V_diff": 10.0, "F": 2000, "W": 1000},
         "End":   {"V_diff": 20.0, "F": 4000, "W": 1500},
         "Special": {"END_A3": True}
@@ -53,6 +62,13 @@ EIGHT_STROKES = {
         "Start": {"V_diff": -10.0, "F": 600, "W": 300},
         "End":   {"V_diff": 20.0, "F": 1500, "W": 1000},
         "Special": {"SPLIT_D1": True, "END_A3": True}
+    },
+    # ★ 追加: 反捺 (長点)
+    "反捺 (長点)": {
+        "Type": "A2",
+        "Start": {"V_diff": 0.0, "F": 800, "W": 400},  # 入り: 静か
+        "End":   {"V_diff": 15.0, "F": 400, "W": 800}, # 止め: 強く重く、ゆっくり
+        "Special": {"END_A3": True}
     }
 }
 
@@ -63,17 +79,16 @@ DEFAULT_VAL4 = 2
 class PlotterCsvEnhancer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("プロッタ用 永字八法エンハンサー (選択範囲強調表示)")
+        self.title("プロッタ用 永字八法エンハンサー (反捺追加版)")
         self.geometry("1200x800")
 
         self.CANVAS_WIDTH = 600
         self.CANVAS_HEIGHT = 600
-        self.COORD_LIMIT = 200.0 # -200 ~ 0
+        self.COORD_LIMIT = 200.0 
         
         self.rows = []
         self.headers = []
         
-        # 行インデックス -> CanvasアイテムID のマッピング
         self.line_ids = {} 
 
         self.create_widgets()
@@ -109,7 +124,6 @@ class PlotterCsvEnhancer(tk.Tk):
         self.listbox.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.listbox.yview)
         
-        # ★ 選択イベントのバインド
         self.listbox.bind('<<ListboxSelect>>', self.on_select_list)
 
         # --- 3. 技法適用 ---
@@ -130,7 +144,6 @@ class PlotterCsvEnhancer(tk.Tk):
         
         legend_frame = tk.Frame(right_frame)
         legend_frame.pack(fill="x")
-        # 座標説明を更新
         tk.Label(legend_frame, text="凡例: 線色=速度(青→赤), 選択中=水色強調, 座標:右上が原点(0,0), 左下が(-200,-200)").pack()
 
     def load_csv(self):
@@ -170,7 +183,7 @@ class PlotterCsvEnhancer(tk.Tk):
                     row['SpkCmdType'] = 'A2'
 
             self.lbl_status.config(text=f"{len(self.rows)}行")
-            self.draw_trajectory() # 先に描画してIDマップを作る
+            self.draw_trajectory()
             self.update_listbox()
             messagebox.showinfo("成功", "CSVを読み込みました。")
         except Exception as e:
@@ -258,12 +271,16 @@ class PlotterCsvEnhancer(tk.Tk):
         recipe = EIGHT_STROKES[stroke_name]
         
         indices = sorted(list(selection))
-        
         target_indices = [i for i in indices if self.rows[i].get('Command') in ['A1', 'G1']]
         
         if not target_indices:
             messagebox.showwarning("警告", "選択範囲に描画コマンド(A1/G1)が含まれていません。")
             return
+
+        # 適用範囲の記録 (完了メッセージ用)
+        start_row_num = target_indices[0] + 1
+        end_row_num = target_indices[-1] + 1
+        applied_count = len(target_indices)
 
         total_duration = 0
         durations = []
@@ -345,7 +362,10 @@ class PlotterCsvEnhancer(tk.Tk):
         self.draw_trajectory()
         self.update_listbox()
         
-        messagebox.showinfo("完了", f"{stroke_name} を適用しました。")
+        msg = f"{stroke_name} を適用しました。\n"
+        msg += f"範囲: 行 {start_row_num} 〜 {end_row_num} (計{applied_count}行のA1/G1)\n"
+        msg += "(Z値相対補正, F値維持, 音設定(A2), 特殊コマンド挿入)"
+        messagebox.showinfo("完了", msg)
 
     def update_listbox(self):
         self.listbox.delete(0, tk.END)
@@ -372,79 +392,33 @@ class PlotterCsvEnhancer(tk.Tk):
                 self.listbox.itemconfig(tk.END, {'bg': '#ffffe0'}) 
 
     def on_select_list(self, event):
-        """リスト選択時にキャンバス上の対応する線を強調表示する"""
         selected_indices = self.listbox.curselection()
         if not selected_indices: return
-
-        # 全ての線を元の色に戻す
-        # (効率化のため、前回選択されていたものだけ戻すロジックも可だが、
-        #  ここではシンプルにdraw_trajectoryを呼ぶか、タグで管理する)
         
-        # 今回はシンプルに、選択されたIDの線だけ色を変える
-        # self.line_ids には {row_index: canvas_item_id} が入っている
-        
-        # まず全リセット (描画処理自体が軽いので再描画でも良いが、色変更のみ行う)
-        # 描画時の色を保持していないと戻せないので、draw_trajectoryを再実行してリセットするのが確実
-        # ただし頻繁な再描画は重いので、タグを使って制御する
-        
-        self.canvas.dtag("selected", "selected") # 既存の選択タグを消す
-        
-        # ハイライト色
-        highlight_color = "#00FFFF" # 水色
-        
-        for idx in self.line_ids:
-            # 元の色に戻す処理が必要だが、元の色は動的に決まっているため
-            # ここでは「全再描画」し、その直後に「選択部分だけ上書き」する戦略を取る
-            # あるいは draw_trajectory 内で選択状態をチェックして描画する
-            pass
-
-        # 効率のため、draw_trajectoryに選択インデックスを渡して再描画させる
+        self.canvas.dtag("selected", "selected") 
         self.draw_trajectory(selected_indices)
 
     def draw_trajectory(self, selected_indices=None):
         self.canvas.delete("all")
-        self.line_ids = {} # マッピング初期化
-        
-        # 座標系: 右上が原点(0,0), 左下が(-200, -200)
-        # Canvas: 左上が(0,0), 右下が(W,H)
-        # X: -200 -> 0 (0 -> W)
-        # Y: -200 -> 0 (H -> 0) ※YはCanvasと逆
+        self.line_ids = {} 
         
         scale_x = self.CANVAS_WIDTH / abs(self.COORD_LIMIT)
         scale_y = self.CANVAS_HEIGHT / abs(self.COORD_LIMIT)
         
-        # 少し余白を持たせる
         scale_x *= 0.9
         scale_y *= 0.9
         offset_x = self.CANVAS_WIDTH * 0.05
         offset_y = self.CANVAS_HEIGHT * 0.05
 
         def to_canvas(cx, cy):
-            # cx: -200 ~ 0
-            # cy: -200 ~ 0
-            # x = (cx - (-200)) * scale = (cx + 200) * scale
             x = (cx + 200) * scale_x + offset_x
-            # y = 0 -> 0, -200 -> H
-            # y = (-cy) * scale
             y = (-cy) * scale_y + offset_y
-            
-            # 原点(0,0)が右上に来るように反転が必要なら調整
-            # 現在のロジック:
-            # cx=-200 -> x=0 (左)
-            # cx=0    -> x=W (右)  OK
-            # cy=-200 -> y=H (下)
-            # cy=0    -> y=0 (上)  OK
-            
-            # 微調整: 右上(0,0) をキャンバスの右上に合わせる
-            # 上記式で cx=0, cy=0 は (W, 0) に近い場所になるはず
-            
             return x, y
 
         prev_x, prev_y = None, None
         
-        # グリッド線 (オプション)
-        self.canvas.create_line(0, offset_y, self.CANVAS_WIDTH, offset_y, fill="#ddd") # Y=0
-        self.canvas.create_line(self.CANVAS_WIDTH-offset_x, 0, self.CANVAS_WIDTH-offset_x, self.CANVAS_HEIGHT, fill="#ddd") # X=0
+        self.canvas.create_line(0, offset_y, self.CANVAS_WIDTH, offset_y, fill="#ddd") 
+        self.canvas.create_line(self.CANVAS_WIDTH-offset_x, 0, self.CANVAS_WIDTH-offset_x, self.CANVAS_HEIGHT, fill="#ddd") 
 
         for i, row in enumerate(self.rows):
             cmd = row.get('Command')
@@ -454,7 +428,6 @@ class PlotterCsvEnhancer(tk.Tk):
             raw_y = float(row.get('Y', 0))
             x, y = to_canvas(raw_x, raw_y)
             
-            # ハイライト判定
             is_selected = selected_indices and (i in selected_indices)
             
             if cmd in ['A0', 'G0']:
@@ -469,11 +442,10 @@ class PlotterCsvEnhancer(tk.Tk):
                     
                     width = max(1, z * 1.5)
                     if is_selected:
-                        width += 2 # 太くする
+                        width += 2 
                     
-                    # 色決定
                     if is_selected:
-                        color = "#00FFFF" # 水色 (Cyan)
+                        color = "#00FFFF" 
                     else:
                         norm_f = min(1.0, max(0.0, (f - 300) / 3700))
                         r = int(255 * norm_f)
@@ -483,7 +455,7 @@ class PlotterCsvEnhancer(tk.Tk):
                     line_id = self.canvas.create_line(prev_x, prev_y, x, y, 
                                         width=width, fill=color, capstyle=tk.ROUND)
                     
-                    self.line_ids[i] = line_id # IDを保存
+                    self.line_ids[i] = line_id 
                 
                 prev_x, prev_y = x, y
             
