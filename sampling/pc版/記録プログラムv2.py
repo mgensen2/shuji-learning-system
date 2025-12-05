@@ -3,6 +3,7 @@ import cv2.aruco as aruco
 import numpy as np
 import sys
 import os
+import time
 
 # --- 1. 設定項目 ---
 # ArUcoマーカー設定
@@ -11,18 +12,15 @@ DETECTOR_PARAMS = aruco.DetectorParameters()
 DETECTOR_PARAMS.polygonalApproxAccuracyRate = 0.05
 DETECTOR = aruco.ArucoDetector(ARUCO_DICT, DETECTOR_PARAMS)
 
-# マーカーIDと角の定義（元のプログラムの設定を踏襲）
 CORNER_IDS = [0, 1, 2, 3] 
 CORNER_INDEX_MAP = { 0: 2, 1: 3, 2: 0, 3: 1 } 
 
-# 保存設定
 WARPED_SIZE = 800       
-CAPTURE_IMAGE_FILENAME = 'calligraphy_image.png' 
 LENS_CALIB_FILE_NAME = 'top_camera_lens.npz' 
 
 # 状態変数
-M_live = None       # 現在検出中の変換行列
-M_locked = None     # ロックされた変換行列
+M_live = None       
+M_locked = None     
 is_area_locked = False
 
 # レンズ補正用変数
@@ -37,7 +35,6 @@ def select_camera_index(prompt_text):
     """カメラを選択させる"""
     print(f"--- {prompt_text} のカメラを選択 ---")
     available_indices = []
-    # 0〜9番のカメラをチェック
     for i in range(10):
         cap_test = cv2.VideoCapture(i)
         if cap_test.isOpened():
@@ -48,7 +45,6 @@ def select_camera_index(prompt_text):
         print("利用可能なカメラが見つかりません。")
         return None
 
-    # カメラが1つしかなければそれを自動選択
     if len(available_indices) == 1:
         print(f"カメラ {available_indices[0]} を自動選択しました。")
         return available_indices[0]
@@ -56,7 +52,6 @@ def select_camera_index(prompt_text):
     print(f"利用可能なインデックス: {available_indices}")
     selected_index = None
     
-    # プレビューを見ながら選択
     for index in available_indices:
         cap = cv2.VideoCapture(index)
         if not cap.isOpened(): continue
@@ -113,34 +108,29 @@ def load_lens_calibration(file_path, frame_size_wh):
 def main():
     global M_live, M_locked, is_area_locked
 
-    # カメラ選択
     cam_index = select_camera_index("撮影用カメラ")
     if cam_index is None: return
 
     cap = cv2.VideoCapture(cam_index)
-    # 解像度設定（必要に応じて変更してください）
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # レンズ補正読み込み
     load_lens_calibration(LENS_CALIB_FILE_NAME, (w, h))
 
-    # 変換先の座標（正方形）
     dst_pts = np.float32([[0, 0], [WARPED_SIZE, 0], [WARPED_SIZE, WARPED_SIZE], [0, WARPED_SIZE]])
 
     print("\n--- 撮影ツール起動 ---")
-    print(" [l] キー: エリアのロック / 解除 (マーカーが見えなくなっても保持します)")
-    print(" [s] キー: 画像を保存 (calligraphy_image.png)")
+    print(" [l] キー: エリアのロック / 解除")
+    print(" [s] キー: ★名前を付けて保存")
     print(" [q] キー: 終了")
 
     while True:
         ret, frame_raw = cap.read()
         if not ret: break
 
-        # レンズ歪み補正（データがあれば）
         if TOP_CAM_MAP_X is not None and TOP_CAM_MAP_Y is not None:
             frame = cv2.remap(frame_raw, TOP_CAM_MAP_X, TOP_CAM_MAP_Y, cv2.INTER_LINEAR)
         else:
@@ -148,37 +138,29 @@ def main():
 
         display_frame = frame.copy()
 
-        # ArUcoマーカー検出
         corners, ids, _ = DETECTOR.detectMarkers(frame)
         if ids is not None:
             aruco.drawDetectedMarkers(display_frame, corners, ids)
 
-        # 4隅の座標取得
         src_pts = [get_marker_point(id, ids, corners) for id in CORNER_IDS]
 
-        # 変換行列の計算
         if all(pt is not None for pt in src_pts):
             src_pts_np = np.float32(src_pts)
             M_live = cv2.getPerspectiveTransform(src_pts_np, dst_pts)
-            # 検出エリアを緑枠で描画
             cv2.polylines(display_frame, [src_pts_np.astype(int)], True, (0, 255, 0), 2)
         else:
             M_live = None
 
-        # 使用する行列の決定
         M_current = M_locked if is_area_locked else M_live
 
-        # UI描画
         status_text = "Area: LOCKED" if is_area_locked else ("Area: DETECTED" if M_live is not None else "Area: SEARCHING...")
         color = (0, 255, 0) if (is_area_locked or M_live is not None) else (0, 0, 255)
         
         cv2.putText(display_frame, status_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-        cv2.putText(display_frame, "[s]:Save  [l]:Lock/Unlock  [q]:Quit", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(display_frame, "[s]:Save Name  [l]:Lock/Unlock  [q]:Quit", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        # プレビュー表示
         cv2.imshow("Capture Tool", display_frame)
 
-        # キー入力処理
         key = cv2.waitKey(1) & 0xFF
 
         if key == ord('l'):
@@ -196,20 +178,38 @@ def main():
 
         if key == ord('s'):
             if M_current is not None:
-                # 射影変換（切り出し）
+                # 切り出し処理
                 warped = cv2.warpPerspective(frame, M_current, (WARPED_SIZE, WARPED_SIZE))
                 
+                # --- ここでユーザーに入力を求める ---
+                print("\n" + "="*40)
+                print("【保存モード】 コンソールでファイル名を入力してください。")
+                print(" ※ 空白でEnterキーを押すと、日時がファイル名になります。")
+                
+                user_input = input(">> ファイル名 (拡張子省略可): ").strip()
+                
+                if not user_input:
+                    # 入力が空ならタイムスタンプを使用
+                    filename_full = f"calligraphy_{int(time.time())}.png"
+                else:
+                    # 拡張子補完
+                    if not user_input.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        filename_full = user_input + ".png"
+                    else:
+                        filename_full = user_input
+                
                 try:
-                    cv2.imwrite(CAPTURE_IMAGE_FILENAME, warped)
-                    print(f"\n★ 保存成功: {CAPTURE_IMAGE_FILENAME}")
+                    cv2.imwrite(filename_full, warped)
+                    print(f"★ 保存しました: {filename_full}")
+                    print("="*40 + "\n")
                     
-                    # 保存した画像を一時的に表示して確認
+                    # 保存画像を少し長く表示して確認しやすくする
                     cv2.imshow("Saved Image", warped)
-                    cv2.waitKey(500) # 0.5秒だけ表示
+                    cv2.waitKey(1500) 
                 except Exception as e:
                     print(f"保存エラー: {e}")
             else:
-                print("エラー: エリアが特定されていません。マーカーを映すかロックしてください。")
+                print("エラー: エリアが特定されていません。")
 
         if key == ord('q'):
             break
