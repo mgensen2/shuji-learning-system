@@ -5,70 +5,57 @@ import math
 import copy
 
 # --- 1. 永字八法レシピ ---
-# PDFの6枚目の表に基づき、音響パラメータ(Speaker)の開始値と終了値を設定
-# Format: [Val1, Val2, Val3, Val4]
-# Val1: Freq/Filter, Val2: Duration/Mod, Val3: Volume, Val4: WaveType
-
 EIGHT_STROKES = {
     "側 (点)": {
         "Type": "A2",
-        # 変化なし: 高域強調、短く鋭い
         "Start_Spk": [180, 50, 220, 2],
         "End_Spk":   [180, 50, 220, 2],
         "Special": {}
     },
     "勒 (横画)": {
         "Type": "A2",
-        # 変化小: 全体的に音量大
         "Start_Spk": [130, 300, 240, 1],
         "End_Spk":   [130, 300, 240, 1],
         "Special": {"END_A3": True}
     },
     "努 (縦画)": {
         "Type": "A2",
-        # 変化小: ローパス、音量最大
         "Start_Spk": [80, 400, 255, 1],
         "End_Spk":   [80, 400, 255, 1],
         "Special": {"END_A3": True}
     },
     "趯 (跳ね)": {
         "Type": "A2",
-        # 変化大: 溜め(ローパス/大) -> 跳ね(ハイパス/小)
         "Start_Spk": [80, 150, 255, 3],
         "End_Spk":   [200, 150, 100, 3],
         "Special": {"END_A3": True}
     },
     "策 (短横画)": {
         "Type": "A2",
-        # 変化あり: 音量 小 -> 大
         "Start_Spk": [160, 150, 150, 1],
         "End_Spk":   [160, 150, 250, 1],
         "Special": {}
     },
     "掠 (左はらい)": {
         "Type": "A2",
-        # 変化大: 音量 中 -> 小 (徐々に小さく)
         "Start_Spk": [120, 300, 180, 1],
         "End_Spk":   [120, 300, 0, 1],
         "Special": {"END_A3": True}
     },
     "啄 (短いはらい)": {
         "Type": "A2",
-        # 変化なし: 鋭い
         "Start_Spk": [170, 80, 200, 2],
         "End_Spk":   [170, 80, 200, 2],
         "Special": {}
     },
     "磔 (右はらい)": {
         "Type": "A2",
-        # 変化大: 音量 小 -> 大 (だんだん大きく)
         "Start_Spk": [90, 500, 100, 1],
         "End_Spk":   [90, 500, 255, 1],
         "Special": {"SPLIT_D1": True, "END_A3": True}
     },
     "反捺 (長点)": {
         "Type": "A2",
-        # 変化あり: 音量 小 -> 大
         "Start_Spk": [100, 400, 100, 1],
         "End_Spk":   [100, 400, 220, 1],
         "Special": {"END_A3": True}
@@ -83,7 +70,7 @@ DEFAULT_SPEAKER_PARAMS = f"{DEFAULT_VAL1} 300 {DEFAULT_VAL3} {DEFAULT_VAL4}"
 class PlotterCsvEnhancer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("プロッタ用 音響エンハンサー (Z/F維持・音響補間版)")
+        self.title("プロッタ用 永字八法エンハンサー (F値逆算・G0新形式)")
         self.geometry("1200x800")
 
         self.CANVAS_WIDTH = 600
@@ -138,6 +125,9 @@ class PlotterCsvEnhancer(tk.Tk):
         self.stroke_var.set(list(EIGHT_STROKES.keys())[0])
         stroke_menu = tk.OptionMenu(convert_frame, self.stroke_var, *EIGHT_STROKES.keys())
         stroke_menu.pack(side="left", padx=5)
+
+        self.use_dynamic_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(convert_frame, text="F/距離で音を動的補正", variable=self.use_dynamic_var).pack(anchor="w", padx=5)
 
         tk.Button(convert_frame, text="適用", command=self.apply_enhancement, bg="#4CAF50", fg="white").pack(side="left", padx=10)
 
@@ -216,6 +206,16 @@ class PlotterCsvEnhancer(tk.Tk):
         except Exception as e:
             messagebox.showerror("エラー", str(e))
 
+    # ★ F値からDelay(ms)を計算する関数
+    def calculate_delay_from_feed(self, f_val):
+        if f_val is None or f_val == '' or float(f_val) == 0:
+            return 100 # デフォルト
+        
+        f = float(f_val)
+        # Delay = 1,500,000 / F
+        delay = 1500000.0 / f
+        return int(delay)
+
     def save_txt_for_plotter(self):
         if not self.rows: return
         filepath = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
@@ -223,25 +223,50 @@ class PlotterCsvEnhancer(tk.Tk):
 
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
-                for row in self.rows:
+                for i, row in enumerate(self.rows):
                     cmd = row.get('Command', 'A0')
                     
                     x = row.get('X', 0.0)
                     y = row.get('Y', 0.0)
                     z = row.get('Z', 0.0)
                     f_val = row.get('F', '')
-                    delay_ms = row.get('Delay_ms', '')
+                    # Delay_msは使わず、F値から計算
+                    
                     cell_id = int(row.get('Cell_ID', 0))
                     
                     speaker_params = row.get('SpeakerParams', DEFAULT_SPEAKER_PARAMS)
                     spk_type = row.get('SpkCmdType', 'A2')
 
-                    spk_delay = int(delay_ms) if delay_ms != '' and delay_ms > 0 else 100
+                    # F値からDelayを計算
+                    spk_delay = self.calculate_delay_from_feed(f_val)
+                    
                     spk_cmd = f"{spk_type} {cell_id} {spk_delay} {speaker_params}"
 
                     if cmd in ['A0', 'G0']:
-                        f.write(f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f}\n")
-                        f.write(f"S {spk_cmd}\n") 
+                        # 次の行（描画開始行）の情報を先読み
+                        next_cell_id = 0
+                        next_delay = 0
+                        next_val1 = DEFAULT_VAL1
+
+                        for j in range(i + 1, len(self.rows)):
+                            next_row = self.rows[j]
+                            next_cmd = next_row.get('Command', '')
+                            if next_cmd in ['A1', 'G1']:
+                                next_cell_id = int(next_row.get('Cell_ID', 0))
+                                
+                                # 次の行のF値からDelayを計算
+                                next_f = next_row.get('F', '')
+                                next_delay = self.calculate_delay_from_feed(next_f)
+                                
+                                next_params = next_row.get('SpeakerParams', DEFAULT_SPEAKER_PARAMS)
+                                try:
+                                    next_val1 = int(next_params.split()[0])
+                                except: pass
+                                break
+                        
+                        # G0 ... A0 {Cell} {Delay} {Val1}
+                        line_g0 = f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f} A0 {next_cell_id} {next_delay} {next_val1}"
+                        f.write(line_g0 + "\n")
                         
                     elif cmd in ['A1', 'G1']: 
                         line = f"G1 X{x:.2f} Y{y:.2f} Z{z:.2f}"
@@ -251,8 +276,10 @@ class PlotterCsvEnhancer(tk.Tk):
                         f.write(line + "\n")
                         
                     elif cmd == 'D1':
-                        if delay_ms != '':
-                            f.write(f"D1 {int(delay_ms)}\n")
+                        # D1の場合はDelay_msを使う（F値がないため）
+                        d_ms = row.get('Delay_ms', '')
+                        if d_ms != '':
+                            f.write(f"D1 {int(d_ms)}\n")
                     
                     elif cmd == 'A3':
                         f.write("A3\n")
@@ -264,6 +291,28 @@ class PlotterCsvEnhancer(tk.Tk):
     def _interpolate(self, start_val, end_val, progress):
         return start_val + (end_val - start_val) * progress
 
+    def calculate_modulated_params(self, base_params_str, f_val, distance):
+        try:
+            base_vals = [float(x) for x in base_params_str.split()]
+            if len(base_vals) < 4: return base_params_str
+        except:
+            return base_params_str
+
+        f_num = float(f_val) if f_val != '' else 1000.0
+        
+        freq_mod = (f_num - 1000.0) * 0.05
+        new_val1 = base_vals[0] + freq_mod
+        new_val1 = max(50, min(800, new_val1)) 
+
+        dist_mod = distance * 2.0
+        new_val2 = base_vals[1] + dist_mod
+        new_val2 = max(50, min(1000, new_val2)) 
+
+        new_val3 = base_vals[2]
+        new_val4 = base_vals[3]
+
+        return f"{int(new_val1)} {int(new_val2)} {int(new_val3)} {int(new_val4)}"
+
     def apply_enhancement(self):
         selection = self.listbox.curselection()
         if not selection:
@@ -272,6 +321,7 @@ class PlotterCsvEnhancer(tk.Tk):
 
         stroke_name = self.stroke_var.get()
         recipe = EIGHT_STROKES[stroke_name]
+        use_dynamic = self.use_dynamic_var.get()
         
         indices = sorted(list(selection))
         target_indices = [i for i in indices if self.rows[i].get('Command') in ['A1', 'G1']]
@@ -280,7 +330,6 @@ class PlotterCsvEnhancer(tk.Tk):
             messagebox.showwarning("警告", "選択範囲に描画コマンド(A1/G1)が含まれていません。")
             return
 
-        # 適用範囲の記録 (完了メッセージ用)
         start_row_num = target_indices[0] + 1
         end_row_num = target_indices[-1] + 1
         applied_count = len(target_indices)
@@ -300,7 +349,6 @@ class PlotterCsvEnhancer(tk.Tk):
         current_time = 0
         
         processed_rows = [] 
-        
         processed_rows.extend(self.rows[:indices[0]])
 
         for i, original_idx in enumerate(indices):
@@ -313,10 +361,8 @@ class PlotterCsvEnhancer(tk.Tk):
             
             t_idx = target_indices.index(original_idx)
             duration = durations[t_idx]
-            
             progress = (current_time + (duration / 2)) / total_duration
             
-            # 特殊処理: 磔 (SPLIT_D1)
             if recipe["Special"].get("SPLIT_D1") and not split_d1_inserted:
                 if progress >= 0.60:
                     d1_row = {
@@ -329,27 +375,41 @@ class PlotterCsvEnhancer(tk.Tk):
                     processed_rows.append(d1_row)
                     split_d1_inserted = True
             
-            # --- 音響パラメータ補間 ---
             start_spk = recipe["Start_Spk"]
             end_spk = recipe["End_Spk"]
             
-            # Val1 ~ Val4 それぞれを補間
             current_spk = []
             for k in range(4):
                 val = self._interpolate(start_spk[k], end_spk[k], progress)
                 current_spk.append(int(val))
             
-            # データ更新
-            row['SpkCmdType'] = recipe["Type"] 
-            row['SpeakerParams'] = f"{current_spk[0]} {current_spk[1]} {current_spk[2]} {current_spk[3]}"
+            # 動的補正 (Dynamic modulation)
+            # 現在の補間済みベース値 (current_spk) に対して、F値/距離による補正を加える
+            base_spk_str = f"{current_spk[0]} {current_spk[1]} {current_spk[2]} {current_spk[3]}"
             
-            # Z値、F値は変更しない (元の値を維持)
+            row['SpkCmdType'] = recipe["Type"] 
+
+            if use_dynamic:
+                prev_x = 0.0
+                prev_y = 0.0
+                if original_idx > 0:
+                    prev_x = float(self.rows[original_idx-1].get('X', 0))
+                    prev_y = float(self.rows[original_idx-1].get('Y', 0))
+                
+                curr_x = float(row.get('X', 0))
+                curr_y = float(row.get('Y', 0))
+                dx = curr_x - prev_x
+                dy = curr_y - prev_y
+                distance = math.sqrt(dx*dx + dy*dy)
+                f_val = row.get('F', '')
+
+                row['SpeakerParams'] = self.calculate_modulated_params(base_spk_str, f_val, distance)
+            else:
+                row['SpeakerParams'] = base_spk_str
             
             processed_rows.append(row)
-            
             current_time += duration
 
-        # 特殊処理: END_A3
         if recipe["Special"].get("END_A3"):
             a3_row = {
                 'Command': 'A3',
@@ -370,7 +430,7 @@ class PlotterCsvEnhancer(tk.Tk):
         
         msg = f"{stroke_name} を適用しました。\n"
         msg += f"範囲: 行 {start_row_num} 〜 {end_row_num} (計{applied_count}行)\n"
-        msg += "(Z/F値維持, 音響パラメータ補間, 特殊コマンド挿入)"
+        msg += "(Z/F値維持, 音響パラメータ補間+動的補正, 特殊コマンド挿入)"
         messagebox.showinfo("完了", msg)
 
     def update_listbox(self):
@@ -409,7 +469,6 @@ class PlotterCsvEnhancer(tk.Tk):
         
         scale_x = self.CANVAS_WIDTH / abs(self.COORD_LIMIT)
         scale_y = self.CANVAS_HEIGHT / abs(self.COORD_LIMIT)
-        
         scale_x *= 0.9
         scale_y *= 0.9
         offset_x = self.CANVAS_WIDTH * 0.05
@@ -476,7 +535,7 @@ class PlotterCsvEnhancer(tk.Tk):
                 prev_x, prev_y = x, y
             
             else:
-                 prev_x, prev_y = x, y
+                prev_x, prev_y = x, y
 
 if __name__ == "__main__":
     app = PlotterCsvEnhancer()
