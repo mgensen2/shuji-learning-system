@@ -5,6 +5,10 @@ import math
 import copy
 
 # --- 1. 永字八法レシピ ---
+# PDFの6枚目の表に基づき、音響パラメータ(Speaker)の開始値と終了値を設定
+# Format: [Val1, Val2, Val3, Val4]
+# Val1: Freq/Filter, Val2: Duration/Mod, Val3: Volume, Val4: WaveType
+
 EIGHT_STROKES = {
     "側 (点)": {
         "Type": "A2",
@@ -70,7 +74,7 @@ DEFAULT_SPEAKER_PARAMS = f"{DEFAULT_VAL1} 300 {DEFAULT_VAL3} {DEFAULT_VAL4}"
 class PlotterCsvEnhancer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("プロッタ用 永字八法エンハンサー (F値逆算・G0新形式)")
+        self.title("プロッタ用 永字八法エンハンサー (G0先行設定・TXT出力)")
         self.geometry("1200x800")
 
         self.CANVAS_WIDTH = 600
@@ -96,10 +100,12 @@ class PlotterCsvEnhancer(tk.Tk):
         
         btn_frame = tk.Frame(file_frame)
         btn_frame.pack(fill="x")
-        tk.Button(btn_frame, text="CSVを開く", command=self.load_csv, bg="#ddd").pack(side="left", padx=5)
-        tk.Button(btn_frame, text="CSV保存", command=self.save_csv, bg="#ddd").pack(side="left", padx=5)
         
-        tk.Button(file_frame, text="TXT保存 (プロッタ用)", command=self.save_txt_for_plotter, bg="#FF9800", fg="white").pack(fill="x", padx=5, pady=5)
+        # CSV読込ボタン
+        tk.Button(btn_frame, text="CSVを開く", command=self.load_csv, bg="#ddd").pack(side="left", padx=5)
+        
+        # ★ TXT保存ボタン (メイン)
+        tk.Button(btn_frame, text="保存 (TXT形式)", command=self.save_txt_for_plotter, bg="#FF9800", fg="white").pack(side="left", padx=5)
         
         self.lbl_status = tk.Label(file_frame, text="未読み込み")
         self.lbl_status.pack(anchor="w", padx=5)
@@ -126,6 +132,7 @@ class PlotterCsvEnhancer(tk.Tk):
         stroke_menu = tk.OptionMenu(convert_frame, self.stroke_var, *EIGHT_STROKES.keys())
         stroke_menu.pack(side="left", padx=5)
 
+        # 動的補正の有無
         self.use_dynamic_var = tk.BooleanVar(value=True)
         tk.Checkbutton(convert_frame, text="F/距離で音を動的補正", variable=self.use_dynamic_var).pack(anchor="w", padx=5)
 
@@ -150,10 +157,12 @@ class PlotterCsvEnhancer(tk.Tk):
                 self.rows = [row for row in reader]
             
             for row in self.rows:
+                # コマンド正規化
                 if 'Command' not in row and 'event_type' in row:
                     evt = row['event_type']
                     row['Command'] = 'A1' if evt == 'move' else 'A0'
                 
+                # 数値変換
                 for k in ['X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID']:
                     val = None
                     for key_candidate in [k, k.lower(), k.upper()]:
@@ -182,30 +191,6 @@ class PlotterCsvEnhancer(tk.Tk):
         except Exception as e:
             messagebox.showerror("エラー", str(e))
 
-    def save_csv(self):
-        if not self.rows: return
-        filepath = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
-        if not filepath: return
-
-        try:
-            output_headers = ['Command', 'X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID', 'SpeakerParams', 'SpkCmdType', 'Z_orig']
-            
-            with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=output_headers, extrasaction='ignore')
-                writer.writeheader()
-                for row in self.rows:
-                    out_row = {}
-                    for k in output_headers:
-                        val = row.get(k, '')
-                        if isinstance(val, float):
-                            if k in ['X', 'Y', 'Z', 'Z_orig']: val = f"{val:.2f}"
-                            else: val = f"{int(val)}"
-                        out_row[k] = val
-                    writer.writerow(out_row)
-            messagebox.showinfo("成功", "CSVを保存しました。")
-        except Exception as e:
-            messagebox.showerror("エラー", str(e))
-
     # ★ F値からDelay(ms)を計算する関数
     def calculate_delay_from_feed(self, f_val):
         if f_val is None or f_val == '' or float(f_val) == 0:
@@ -216,6 +201,7 @@ class PlotterCsvEnhancer(tk.Tk):
         delay = 1500000.0 / f
         return int(delay)
 
+    # ★ TXT形式で保存するメソッド (Cho.txt形式準拠)
     def save_txt_for_plotter(self):
         if not self.rows: return
         filepath = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
@@ -230,24 +216,26 @@ class PlotterCsvEnhancer(tk.Tk):
                     y = row.get('Y', 0.0)
                     z = row.get('Z', 0.0)
                     f_val = row.get('F', '')
-                    # Delay_msは使わず、F値から計算
                     
                     cell_id = int(row.get('Cell_ID', 0))
                     
                     speaker_params = row.get('SpeakerParams', DEFAULT_SPEAKER_PARAMS)
                     spk_type = row.get('SpkCmdType', 'A2')
 
-                    # F値からDelayを計算
+                    # F値からDelayを計算 (A2用)
                     spk_delay = self.calculate_delay_from_feed(f_val)
                     
+                    # G1行用のスピーカコマンド: A2 Cell Delay Params...
                     spk_cmd = f"{spk_type} {cell_id} {spk_delay} {speaker_params}"
 
                     if cmd in ['A0', 'G0']:
-                        # 次の行（描画開始行）の情報を先読み
+                        # --- G0 (移動) 行 ---
+                        # 次の描画行 (G1/A1) を探して、その情報を先読みする
                         next_cell_id = 0
                         next_delay = 0
                         next_val1 = DEFAULT_VAL1
 
+                        found_next = False
                         for j in range(i + 1, len(self.rows)):
                             next_row = self.rows[j]
                             next_cmd = next_row.get('Command', '')
@@ -258,20 +246,26 @@ class PlotterCsvEnhancer(tk.Tk):
                                 next_f = next_row.get('F', '')
                                 next_delay = self.calculate_delay_from_feed(next_f)
                                 
+                                # 次の行のVal1を取得
                                 next_params = next_row.get('SpeakerParams', DEFAULT_SPEAKER_PARAMS)
                                 try:
                                     next_val1 = int(next_params.split()[0])
                                 except: pass
+                                found_next = True
                                 break
                         
-                        # G0 ... A0 {Cell} {Delay} {Val1}
-                        line_g0 = f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f} A0 {next_cell_id} {next_delay} {next_val1}"
+                        # G0出力形式: G0 X.. Y.. Z.. A0 {Cell} {Delay} {Val1}
+                        line_g0 = f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f}"
+                        if found_next:
+                             line_g0 += f" A0 {next_cell_id} {next_delay} {next_val1}"
                         f.write(line_g0 + "\n")
                         
                     elif cmd in ['A1', 'G1']: 
+                        # --- G1 (描画) 行 ---
                         line = f"G1 X{x:.2f} Y{y:.2f} Z{z:.2f}"
                         if f_val != '':
                             line += f" F{int(f_val)}"
+                        # 行末にタブ区切りでスピーカコマンド
                         line += f"\t{spk_cmd}" 
                         f.write(line + "\n")
                         
@@ -300,6 +294,7 @@ class PlotterCsvEnhancer(tk.Tk):
 
         f_num = float(f_val) if f_val != '' else 1000.0
         
+        # 補正ロジック
         freq_mod = (f_num - 1000.0) * 0.05
         new_val1 = base_vals[0] + freq_mod
         new_val1 = max(50, min(800, new_val1)) 
@@ -334,12 +329,12 @@ class PlotterCsvEnhancer(tk.Tk):
         end_row_num = target_indices[-1] + 1
         applied_count = len(target_indices)
 
+        # 経過時間の計算 (F値から逆算)
         total_duration = 0
         durations = []
         for i in target_indices:
-            d = self.rows[i].get('Delay_ms', 0)
-            if d == '': d = 0
-            d = float(d)
+            f_val = self.rows[i].get('F', '')
+            d = self.calculate_delay_from_feed(f_val)
             durations.append(d)
             total_duration += d
         
@@ -363,6 +358,7 @@ class PlotterCsvEnhancer(tk.Tk):
             duration = durations[t_idx]
             progress = (current_time + (duration / 2)) / total_duration
             
+            # 特殊処理: 磔 (SPLIT_D1)
             if recipe["Special"].get("SPLIT_D1") and not split_d1_inserted:
                 if progress >= 0.60:
                     d1_row = {
@@ -383,10 +379,7 @@ class PlotterCsvEnhancer(tk.Tk):
                 val = self._interpolate(start_spk[k], end_spk[k], progress)
                 current_spk.append(int(val))
             
-            # 動的補正 (Dynamic modulation)
-            # 現在の補間済みベース値 (current_spk) に対して、F値/距離による補正を加える
             base_spk_str = f"{current_spk[0]} {current_spk[1]} {current_spk[2]} {current_spk[3]}"
-            
             row['SpkCmdType'] = recipe["Type"] 
 
             if use_dynamic:
@@ -422,15 +415,12 @@ class PlotterCsvEnhancer(tk.Tk):
             processed_rows.append(a3_row)
 
         processed_rows.extend(self.rows[indices[-1]+1:])
-        
         self.rows = processed_rows
         
         self.draw_trajectory()
         self.update_listbox()
         
-        msg = f"{stroke_name} を適用しました。\n"
-        msg += f"範囲: 行 {start_row_num} 〜 {end_row_num} (計{applied_count}行)\n"
-        msg += "(Z/F値維持, 音響パラメータ補間+動的補正, 特殊コマンド挿入)"
+        msg = f"{stroke_name} を適用しました。\n範囲: 行 {start_row_num} 〜 {end_row_num}"
         messagebox.showinfo("完了", msg)
 
     def update_listbox(self):
@@ -469,6 +459,7 @@ class PlotterCsvEnhancer(tk.Tk):
         
         scale_x = self.CANVAS_WIDTH / abs(self.COORD_LIMIT)
         scale_y = self.CANVAS_HEIGHT / abs(self.COORD_LIMIT)
+        
         scale_x *= 0.9
         scale_y *= 0.9
         offset_x = self.CANVAS_WIDTH * 0.05
@@ -535,7 +526,7 @@ class PlotterCsvEnhancer(tk.Tk):
                 prev_x, prev_y = x, y
             
             else:
-                prev_x, prev_y = x, y
+                 prev_x, prev_y = x, y
 
 if __name__ == "__main__":
     app = PlotterCsvEnhancer()
