@@ -376,7 +376,7 @@ def play_recorded_file(filename, pl, sp):
                             # ログは write 内部で出力条件分岐済みだが、sync呼び出し前に確認
                             if pl.ser:
                                 print(f"[{lineno}] プロッタへ送信: {plotter_line}")
-                            pl.write(None, None, None, None) # ※注意: この関数play_recorded_fileは元の設計で pl.write を直接呼んでいない。
+                            #pl.write(None, None, None, None) # ※注意: この関数play_recorded_fileは元の設計で pl.write を直接呼んでいない。
                             # 元コードでは _safe_serial_write(pl.ser, plotter_line) を呼んでいたため、
                             # クラスメソッドではなく直接送信していました。修正します。
                             _safe_serial_write(pl.ser, plotter_line) 

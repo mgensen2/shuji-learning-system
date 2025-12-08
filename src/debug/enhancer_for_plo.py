@@ -4,57 +4,100 @@ import csv
 import math
 import copy
 
-# --- 1. 永字八法レシピ (音の設定のみ) ---
-# Format: "Val1 Val2 Val3 Val4"
+# --- 1. 永字八法レシピ ---
+# PDFの6枚目の表に基づき、音響パラメータ(Speaker)の開始値と終了値を設定
+# Format: [Val1, Val2, Val3, Val4]
+# Val1: Freq/Filter, Val2: Duration/Mod, Val3: Volume, Val4: WaveType
+
 EIGHT_STROKES = {
-    "動的 (F/距離連動)": {
-        "Speaker": "DYNAMIC" 
-    },
     "側 (点)": {
-        "Speaker": "150 100 250 2"
+        "Type": "A2",
+        # 変化なし: 高域強調、短く鋭い
+        "Start_Spk": [180, 50, 220, 2],
+        "End_Spk":   [180, 50, 220, 2],
+        "Special": {}
     },
     "勒 (横画)": {
-        "Speaker": "130 300 250 1"
+        "Type": "A2",
+        # 変化小: 全体的に音量大
+        "Start_Spk": [130, 300, 240, 1],
+        "End_Spk":   [130, 300, 240, 1],
+        "Special": {"END_A3": True}
     },
     "努 (縦画)": {
-        "Speaker": "100 400 255 1"
+        "Type": "A2",
+        # 変化小: ローパス、音量最大
+        "Start_Spk": [80, 400, 255, 1],
+        "End_Spk":   [80, 400, 255, 1],
+        "Special": {"END_A3": True}
     },
     "趯 (跳ね)": {
-        "Speaker": "200 150 250 3"
+        "Type": "A2",
+        # 変化大: 溜め(ローパス/大) -> 跳ね(ハイパス/小)
+        "Start_Spk": [80, 150, 255, 3],
+        "End_Spk":   [200, 150, 100, 3],
+        "Special": {"END_A3": True}
     },
     "策 (短横画)": {
-        "Speaker": "140 200 250 1"
+        "Type": "A2",
+        # 変化あり: 音量 小 -> 大
+        "Start_Spk": [160, 150, 150, 1],
+        "End_Spk":   [160, 150, 250, 1],
+        "Special": {}
     },
     "掠 (左はらい)": {
-        "Speaker": "120 350 240 1"
+        "Type": "A2",
+        # 変化大: 音量 中 -> 小 (徐々に小さく)
+        "Start_Spk": [120, 300, 180, 1],
+        "End_Spk":   [120, 300, 0, 1],
+        "Special": {"END_A3": True}
     },
     "啄 (短いはらい)": {
-        "Speaker": "180 100 250 2"
+        "Type": "A2",
+        # 変化なし: 鋭い
+        "Start_Spk": [170, 80, 200, 2],
+        "End_Spk":   [170, 80, 200, 2],
+        "Special": {}
     },
     "磔 (右はらい)": {
-        "Speaker": "110 500 255 1"
+        "Type": "A2",
+        # 変化大: 音量 小 -> 大 (だんだん大きく)
+        "Start_Spk": [90, 500, 100, 1],
+        "End_Spk":   [90, 500, 255, 1],
+        "Special": {"SPLIT_D1": True, "END_A3": True}
+    },
+    "反捺 (長点)": {
+        "Type": "A2",
+        # 変化あり: 音量 小 -> 大
+        "Start_Spk": [100, 400, 100, 1],
+        "End_Spk":   [100, 400, 220, 1],
+        "Special": {"END_A3": True}
     }
 }
 
-DEFAULT_SPEAKER_PARAMS = "130 300 250 2"
+DEFAULT_VAL1 = 130
+DEFAULT_VAL3 = 250
+DEFAULT_VAL4 = 2
+DEFAULT_SPEAKER_PARAMS = f"{DEFAULT_VAL1} 300 {DEFAULT_VAL3} {DEFAULT_VAL4}"
 
 class PlotterCsvEnhancer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("プロッタ用 音響エンハンサー (動的F/距離対応)")
-        self.geometry("1100x700")
+        self.title("プロッタ用 音響エンハンサー (Z/F維持・音響補間版)")
+        self.geometry("1200x800")
 
-        self.CANVAS_WIDTH = 550
-        self.CANVAS_HEIGHT = 550
-        self.COORD_LIMIT = 200.0
+        self.CANVAS_WIDTH = 600
+        self.CANVAS_HEIGHT = 600
+        self.COORD_LIMIT = 200.0 
         
         self.rows = []
         self.headers = []
+        self.line_ids = {} 
 
         self.create_widgets()
 
     def create_widgets(self):
-        left_frame = tk.Frame(self, padx=10, pady=10, width=400)
+        left_frame = tk.Frame(self, padx=10, pady=10, width=450)
         left_frame.pack(side="left", fill="y")
         
         right_frame = tk.Frame(self, padx=10, pady=10)
@@ -75,25 +118,25 @@ class PlotterCsvEnhancer(tk.Tk):
         self.lbl_status.pack(anchor="w", padx=5)
 
         # --- 2. データリスト ---
-        list_frame = tk.LabelFrame(left_frame, text="2. データ選択 (A1/G1行を選択)", padx=5, pady=5)
+        list_frame = tk.LabelFrame(left_frame, text="2. データ選択 (ストローク単位)", padx=5, pady=5)
         list_frame.pack(fill="both", expand=True, pady=5)
         
         scrollbar = tk.Scrollbar(list_frame)
         scrollbar.pack(side="right", fill="y")
-        self.listbox = tk.Listbox(list_frame, selectmode="extended", yscrollcommand=scrollbar.set, font=("Consolas", 9))
+        self.listbox = tk.Listbox(list_frame, selectmode="extended", yscrollcommand=scrollbar.set, font=("Consolas", 10))
         self.listbox.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.listbox.yview)
+        
+        self.listbox.bind('<<ListboxSelect>>', self.on_select_list)
 
-        # --- 3. 音響設定 ---
-        convert_frame = tk.LabelFrame(left_frame, text="3. 音響設定", padx=5, pady=5)
+        # --- 3. 技法適用 ---
+        convert_frame = tk.LabelFrame(left_frame, text="3. 永字八法 適用", padx=5, pady=5)
         convert_frame.pack(fill="x", pady=5)
 
-        tk.Label(convert_frame, text="技法/モード:").pack(side="left")
+        tk.Label(convert_frame, text="技法:").pack(side="left")
         self.stroke_var = tk.StringVar(self)
-        self.stroke_var.set("動的 (F/距離連動)") 
-        
-        menu_items = ["動的 (F/距離連動)"] + [k for k in EIGHT_STROKES.keys() if k != "動的 (F/距離連動)"]
-        stroke_menu = tk.OptionMenu(convert_frame, self.stroke_var, *menu_items)
+        self.stroke_var.set(list(EIGHT_STROKES.keys())[0])
+        stroke_menu = tk.OptionMenu(convert_frame, self.stroke_var, *EIGHT_STROKES.keys())
         stroke_menu.pack(side="left", padx=5)
 
         tk.Button(convert_frame, text="適用", command=self.apply_enhancement, bg="#4CAF50", fg="white").pack(side="left", padx=10)
@@ -104,7 +147,7 @@ class PlotterCsvEnhancer(tk.Tk):
         
         legend_frame = tk.Frame(right_frame)
         legend_frame.pack(fill="x")
-        tk.Label(legend_frame, text="凡例: 線色=速度(青:遅→赤:速), 線太さ=筆圧(Z)").pack()
+        tk.Label(legend_frame, text="凡例: 線色=速度(青→赤), 選択中=水色強調, 座標:右上が原点(0,0), 左下が(-200,-200)").pack()
 
     def load_csv(self):
         filepath = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
@@ -119,34 +162,32 @@ class PlotterCsvEnhancer(tk.Tk):
             for row in self.rows:
                 if 'Command' not in row and 'event_type' in row:
                     evt = row['event_type']
-                    if evt == 'down': row['Command'] = 'A0'
-                    elif evt == 'move': row['Command'] = 'A1'
-                    elif evt == 'up': row['Command'] = 'A0'
-                    else: row['Command'] = 'A0'
+                    row['Command'] = 'A1' if evt == 'move' else 'A0'
                 
-                for k in ['X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID', 'pressure', 'x', 'y']:
+                for k in ['X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID']:
                     val = None
-                    if k in row: val = row[k]
-                    elif k.lower() in row: val = row[k.lower()]
-                    elif k.upper() in row: val = row[k.upper()]
+                    for key_candidate in [k, k.lower(), k.upper()]:
+                        if key_candidate in row:
+                            val = row[key_candidate]
+                            break
                     
                     if val is not None and val != '':
                         try:
-                            target_key = k
-                            if k in ['x', 'X']: target_key = 'X'
-                            if k in ['y', 'Y']: target_key = 'Y'
-                            if k in ['z', 'Z', 'pressure']: target_key = 'Z'
-                            if k in ['cell_id', 'Cell_ID']: target_key = 'Cell_ID'
-                            
-                            row[target_key] = float(val)
+                            row[k] = float(val)
                         except: pass
+                
+                if 'Z_orig' not in row:
+                    row['Z_orig'] = row.get('Z', 0.0)
                 
                 if 'SpeakerParams' not in row:
                     row['SpeakerParams'] = DEFAULT_SPEAKER_PARAMS
+                
+                if 'SpkCmdType' not in row:
+                    row['SpkCmdType'] = 'A2'
 
             self.lbl_status.config(text=f"{len(self.rows)}行")
-            self.update_listbox()
             self.draw_trajectory()
+            self.update_listbox()
             messagebox.showinfo("成功", "CSVを読み込みました。")
         except Exception as e:
             messagebox.showerror("エラー", str(e))
@@ -157,7 +198,7 @@ class PlotterCsvEnhancer(tk.Tk):
         if not filepath: return
 
         try:
-            output_headers = ['Command', 'X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID', 'SpeakerParams']
+            output_headers = ['Command', 'X', 'Y', 'Z', 'F', 'Delay_ms', 'Cell_ID', 'SpeakerParams', 'SpkCmdType', 'Z_orig']
             
             with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.DictWriter(f, fieldnames=output_headers, extrasaction='ignore')
@@ -167,7 +208,7 @@ class PlotterCsvEnhancer(tk.Tk):
                     for k in output_headers:
                         val = row.get(k, '')
                         if isinstance(val, float):
-                            if k in ['X', 'Y', 'Z']: val = f"{val:.2f}"
+                            if k in ['X', 'Y', 'Z', 'Z_orig']: val = f"{val:.2f}"
                             else: val = f"{int(val)}"
                         out_row[k] = val
                     writer.writerow(out_row)
@@ -184,13 +225,7 @@ class PlotterCsvEnhancer(tk.Tk):
             with open(filepath, 'w', encoding='utf-8') as f:
                 for row in self.rows:
                     cmd = row.get('Command', 'A0')
-                    g_code = cmd
-                    if cmd == 'A0': g_code = 'G0'
-                    if cmd == 'A1': g_code = 'G1'
                     
-                    if g_code not in ['G0', 'G1', 'D1']:
-                        continue
-
                     x = row.get('X', 0.0)
                     y = row.get('Y', 0.0)
                     z = row.get('Z', 0.0)
@@ -199,90 +234,144 @@ class PlotterCsvEnhancer(tk.Tk):
                     cell_id = int(row.get('Cell_ID', 0))
                     
                     speaker_params = row.get('SpeakerParams', DEFAULT_SPEAKER_PARAMS)
+                    spk_type = row.get('SpkCmdType', 'A2')
 
                     spk_delay = int(delay_ms) if delay_ms != '' and delay_ms > 0 else 100
-                    spk_cmd = f"A2 {cell_id} {spk_delay} {speaker_params}"
+                    spk_cmd = f"{spk_type} {cell_id} {spk_delay} {speaker_params}"
 
-                    if g_code == 'G0':
-                        line_g0 = f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f}"
-                        line_s = f"S {spk_cmd}"
-                        f.write(line_g0 + "\n")
-                        f.write(line_s + "\n")
+                    if cmd in ['A0', 'G0']:
+                        f.write(f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f}\n")
+                        f.write(f"S {spk_cmd}\n") 
                         
-                    elif g_code == 'G1':
-                        line_g1 = f"G1 X{x:.2f} Y{y:.2f} Z{z:.2f}"
+                    elif cmd in ['A1', 'G1']: 
+                        line = f"G1 X{x:.2f} Y{y:.2f} Z{z:.2f}"
                         if f_val != '':
-                            line_g1 += f" F{int(f_val)}"
+                            line += f" F{int(f_val)}"
+                        line += f"\t{spk_cmd}" 
+                        f.write(line + "\n")
                         
-                        line_g1 += f"\t{spk_cmd}"
-                        f.write(line_g1 + "\n")
-                        
-                    elif g_code == 'D1':
+                    elif cmd == 'D1':
                         if delay_ms != '':
                             f.write(f"D1 {int(delay_ms)}\n")
+                    
+                    elif cmd == 'A3':
+                        f.write("A3\n")
 
             messagebox.showinfo("成功", f"プロッタ用TXTファイルを保存しました。\n{filepath}")
         except Exception as e:
             messagebox.showerror("エラー", str(e))
 
-    def calculate_dynamic_params(self, f_val, distance):
-        f_num = float(f_val) if f_val != '' else 1000.0
-        val1 = 100 + (f_num / 20.0)
-        val1 = max(50, min(500, val1))
-
-        val2 = 100 + (distance * 4.0)
-        val2 = max(50, min(800, val2))
-
-        val3 = 250
-        val4 = 2
-
-        return f"{int(val1)} {int(val2)} {int(val3)} {int(val4)}"
+    def _interpolate(self, start_val, end_val, progress):
+        return start_val + (end_val - start_val) * progress
 
     def apply_enhancement(self):
         selection = self.listbox.curselection()
         if not selection:
-            messagebox.showwarning("警告", "適用したい行を選択してください。")
+            messagebox.showwarning("警告", "変換したい範囲を選択してください。")
             return
 
         stroke_name = self.stroke_var.get()
-        is_dynamic = (stroke_name == "動的 (F/距離連動)")
+        recipe = EIGHT_STROKES[stroke_name]
         
-        fixed_params = DEFAULT_SPEAKER_PARAMS
-        if not is_dynamic:
-            fixed_params = EIGHT_STROKES[stroke_name]["Speaker"]
-        
-        indices = list(selection)
+        indices = sorted(list(selection))
         target_indices = [i for i in indices if self.rows[i].get('Command') in ['A1', 'G1']]
         
         if not target_indices:
             messagebox.showwarning("警告", "選択範囲に描画コマンド(A1/G1)が含まれていません。")
             return
 
-        for idx in target_indices:
-            if is_dynamic:
-                prev_x = 0.0
-                prev_y = 0.0
-                if idx > 0:
-                    prev_x = float(self.rows[idx-1].get('X', 0))
-                    prev_y = float(self.rows[idx-1].get('Y', 0))
-                
-                curr_x = float(self.rows[idx].get('X', 0))
-                curr_y = float(self.rows[idx].get('Y', 0))
-                
-                dx = curr_x - prev_x
-                dy = curr_y - prev_y
-                distance = math.sqrt(dx*dx + dy*dy)
-                
-                f_val = self.rows[idx].get('F', '')
-                
-                self.rows[idx]['SpeakerParams'] = self.calculate_dynamic_params(f_val, distance)
-            else:
-                self.rows[idx]['SpeakerParams'] = fixed_params
+        # 適用範囲の記録 (完了メッセージ用)
+        start_row_num = target_indices[0] + 1
+        end_row_num = target_indices[-1] + 1
+        applied_count = len(target_indices)
 
+        total_duration = 0
+        durations = []
+        for i in target_indices:
+            d = self.rows[i].get('Delay_ms', 0)
+            if d == '': d = 0
+            d = float(d)
+            durations.append(d)
+            total_duration += d
+        
+        if total_duration == 0: total_duration = 1
+
+        split_d1_inserted = False
+        current_time = 0
+        
+        processed_rows = [] 
+        
+        processed_rows.extend(self.rows[:indices[0]])
+
+        for i, original_idx in enumerate(indices):
+            row = self.rows[original_idx]
+            cmd = row.get('Command')
+            
+            if cmd not in ['A1', 'G1']:
+                processed_rows.append(row)
+                continue
+            
+            t_idx = target_indices.index(original_idx)
+            duration = durations[t_idx]
+            
+            progress = (current_time + (duration / 2)) / total_duration
+            
+            # 特殊処理: 磔 (SPLIT_D1)
+            if recipe["Special"].get("SPLIT_D1") and not split_d1_inserted:
+                if progress >= 0.60:
+                    d1_row = {
+                        'Command': 'D1',
+                        'Delay_ms': 500, 
+                        'X': row.get('X'), 'Y': row.get('Y'),
+                        'Z': 0, 'F': '', 'Cell_ID': row.get('Cell_ID'),
+                        'SpeakerParams': DEFAULT_SPEAKER_PARAMS
+                    }
+                    processed_rows.append(d1_row)
+                    split_d1_inserted = True
+            
+            # --- 音響パラメータ補間 ---
+            start_spk = recipe["Start_Spk"]
+            end_spk = recipe["End_Spk"]
+            
+            # Val1 ~ Val4 それぞれを補間
+            current_spk = []
+            for k in range(4):
+                val = self._interpolate(start_spk[k], end_spk[k], progress)
+                current_spk.append(int(val))
+            
+            # データ更新
+            row['SpkCmdType'] = recipe["Type"] 
+            row['SpeakerParams'] = f"{current_spk[0]} {current_spk[1]} {current_spk[2]} {current_spk[3]}"
+            
+            # Z値、F値は変更しない (元の値を維持)
+            
+            processed_rows.append(row)
+            
+            current_time += duration
+
+        # 特殊処理: END_A3
+        if recipe["Special"].get("END_A3"):
+            a3_row = {
+                'Command': 'A3',
+                'X': processed_rows[-1].get('X'),
+                'Y': processed_rows[-1].get('Y'),
+                'Z': 0, 'F': '', 'Delay_ms': '',
+                'Cell_ID': processed_rows[-1].get('Cell_ID'),
+                'SpeakerParams': DEFAULT_SPEAKER_PARAMS
+            }
+            processed_rows.append(a3_row)
+
+        processed_rows.extend(self.rows[indices[-1]+1:])
+        
+        self.rows = processed_rows
+        
+        self.draw_trajectory()
         self.update_listbox()
-        for i in indices:
-            self.listbox.selection_set(i)
-        messagebox.showinfo("完了", f"{stroke_name} の音設定を適用しました。")
+        
+        msg = f"{stroke_name} を適用しました。\n"
+        msg += f"範囲: 行 {start_row_num} 〜 {end_row_num} (計{applied_count}行)\n"
+        msg += "(Z/F値維持, 音響パラメータ補間, 特殊コマンド挿入)"
+        messagebox.showinfo("完了", msg)
 
     def update_listbox(self):
         self.listbox.delete(0, tk.END)
@@ -292,37 +381,62 @@ class PlotterCsvEnhancer(tk.Tk):
             y = row.get('Y', 0)
             z = row.get('Z', 0)
             f = row.get('F', '')
-            cid = row.get('Cell_ID', '')
-            spk = row.get('SpeakerParams', DEFAULT_SPEAKER_PARAMS)
+            f_str = f"{int(f)}" if f!='' and f is not None else ""
+            z_str = f"{float(z):.1f}"
             
-            txt = f"{i+1:03d}: {cmd} | Cell:{cid} | Z:{z:.1f} F:{f} | Spk:{spk}"
+            spk_type = row.get('SpkCmdType', '')
+            spk_params = row.get('SpeakerParams', '')
+            
+            prefix = ""
+            if cmd == 'D1': prefix = "[待機] "
+            if cmd == 'A3': prefix = "[停止] "
+            
+            txt = f"{i+1:03d}: {prefix}{cmd} | Z:{z_str} F:{f_str} | {spk_type} {spk_params}"
             self.listbox.insert(tk.END, txt)
+            
+            if cmd in ['D1', 'A3']:
+                self.listbox.itemconfig(tk.END, {'bg': '#ffffe0'}) 
 
-    def draw_trajectory(self):
+    def on_select_list(self, event):
+        selected_indices = self.listbox.curselection()
+        if not selected_indices: return
+        self.canvas.dtag("selected", "selected") 
+        self.draw_trajectory(selected_indices)
+
+    def draw_trajectory(self, selected_indices=None):
         self.canvas.delete("all")
+        self.line_ids = {} 
         
-        scale = self.CANVAS_WIDTH / (self.COORD_LIMIT * 2.2)
-        center_x = self.CANVAS_WIDTH / 2
-        center_y = self.CANVAS_HEIGHT / 2
+        scale_x = self.CANVAS_WIDTH / abs(self.COORD_LIMIT)
+        scale_y = self.CANVAS_HEIGHT / abs(self.COORD_LIMIT)
+        
+        scale_x *= 0.9
+        scale_y *= 0.9
+        offset_x = self.CANVAS_WIDTH * 0.05
+        offset_y = self.CANVAS_HEIGHT * 0.05
 
         def to_canvas(cx, cy):
-            x = (cx + 100) * scale + center_x 
-            # ★ Y座標の方向を反転 (下方向がマイナスのため)
-            y = (-cy) * scale + center_y + (100 * scale)
+            x = (cx + 200) * scale_x + offset_x
+            y = (-cy) * scale_y + offset_y
             return x, y
 
         prev_x, prev_y = None, None
         
-        for row in self.rows:
+        self.canvas.create_line(0, offset_y, self.CANVAS_WIDTH, offset_y, fill="#ddd") 
+        self.canvas.create_line(self.CANVAS_WIDTH-offset_x, 0, self.CANVAS_WIDTH-offset_x, self.CANVAS_HEIGHT, fill="#ddd") 
+
+        for i, row in enumerate(self.rows):
             cmd = row.get('Command')
-            if cmd not in ['A0', 'A1', 'D1', 'G0', 'G1']: continue
+            if cmd not in ['A0', 'A1', 'D1', 'G0', 'G1', 'A3']: continue
             
             raw_x = float(row.get('X', 0))
             raw_y = float(row.get('Y', 0))
-            cx, cy = to_canvas(raw_x, raw_y)
+            x, y = to_canvas(raw_x, raw_y)
+            
+            is_selected = selected_indices and (i in selected_indices)
             
             if cmd in ['A0', 'G0']:
-                prev_x, prev_y = cx, cy
+                prev_x, prev_y = x, y
                 
             elif cmd in ['A1', 'G1']:
                 if prev_x is not None:
@@ -331,20 +445,38 @@ class PlotterCsvEnhancer(tk.Tk):
                     if f == '': f = 1000
                     f = float(f)
                     
-                    width = max(1, z)
-                    norm_f = min(1.0, max(0.0, (f - 500) / 3500))
-                    r = int(255 * norm_f)
-                    b = int(255 * (1 - norm_f))
-                    color = f"#{r:02x}00{b:02x}"
+                    width = max(1, z * 1.5)
+                    if is_selected:
+                        width += 2 
                     
-                    self.canvas.create_line(prev_x, prev_y, cx, cy, width=width, fill=color, capstyle=tk.ROUND)
+                    if is_selected:
+                        color = "#00FFFF" 
+                    else:
+                        norm_f = min(1.0, max(0.0, (f - 300) / 3700))
+                        r = int(255 * norm_f)
+                        b = int(255 * (1 - norm_f))
+                        color = f"#{r:02x}00{b:02x}"
+                    
+                    line_id = self.canvas.create_line(prev_x, prev_y, x, y, 
+                                        width=width, fill=color, capstyle=tk.ROUND)
+                    self.line_ids[i] = line_id 
                 
-                prev_x, prev_y = cx, cy
+                prev_x, prev_y = x, y
             
             elif cmd == 'D1':
                 r = 3
-                self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r, fill="black")
-                prev_x, prev_y = cx, cy
+                fill_c = "red" if is_selected else "black"
+                self.canvas.create_oval(x-r, y-r, x+r, y+r, fill=fill_c, outline=fill_c)
+                prev_x, prev_y = x, y
+                
+            elif cmd == 'A3':
+                r = 4
+                fill_c = "#00FFFF" if is_selected else "red"
+                self.canvas.create_oval(x-r, y-r, x+r, y+r, fill=fill_c, outline=fill_c)
+                prev_x, prev_y = x, y
+            
+            else:
+                 prev_x, prev_y = x, y
 
 if __name__ == "__main__":
     app = PlotterCsvEnhancer()
