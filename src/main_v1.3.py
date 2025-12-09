@@ -209,7 +209,6 @@ class Speaker:
 
     def play_a0_sound(self, idx):
         """STROKE_COUNT に対応するファイルを非同期再生する。./sounds/001.wav 形式を期待。"""
-        # シリアルが無効（プロッタのみモードなど）の場合は音声も再生しない
         if self.ser is None:
             return
 
@@ -254,12 +253,12 @@ class Plotter:
         center_x = ((x_min + x_max) / 2) - 210
         center_y = -((y_min + y_max) / 2)
         delay = int(cmd_tokens[2])
-        # feedrate 計算（既存ロジック維持）
         feed = 25 / (delay / 1000.0)
         feed = feed * 60
         return (center_x, center_y, feed)
 
     def write(self, center_x, center_y, feed, branch):
+        """(旧メソッド) 単純書き込み用。連続動作には send_stream を推奨。"""
         if branch:
             line = f"G0 X{center_x:.3f} Y{center_y:.3f}"
         else:
@@ -267,9 +266,31 @@ class Plotter:
         try:
             _safe_serial_write(self.ser, line)
             if self.ser:
-                print(f"[Plotter] 送信: {line}")
+                print(f"[Plotter] 送信(write): {line}")
         except Exception as e:
             print(f"Plotter write error: {e}")
+
+    # ★修正1: ストリーミング配信用メソッドを追加
+    def send_stream(self, command):
+        """コマンドを送信し、'ok' が返ってくるまで待機する（動きの完了は待たず、バッファ入りを確認するのみ）"""
+        if not self.ser:
+            return
+        
+        line = str(command).strip()
+        _safe_serial_write(self.ser, line)
+        print(f"[Plotter] Stream送信: {line}")
+
+        # GRBLからの 'ok' を待つ
+        while True:
+            try:
+                resp = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                if resp == 'ok':
+                    break # okが来たら即座に次へ（動きは止まらない）
+                if resp.lower().startswith('error'):
+                    print(f"[Plotter] Error受信: {resp}")
+                    break
+            except Exception:
+                pass
 
     def reset(self):
         _safe_serial_write(self.ser, "G0 X0 Y0 Z0")
@@ -287,14 +308,15 @@ class Plotter:
             print("[Plotter] up 送信")
 
     def sync(self, timeout=5.0):
-        """タイムアウト付きでデバイス応答を待つ。応答形式に寛容に対応する。"""
+        """
+        タイムアウト付きでデバイス応答を待つ。
+        ★修正: 'ok' ではなく 'Idle' になるまで待つ（完全に動きが終わるのを待つ）
+        """
         if not self.ser:
-            # プロッタなしモードの場合、待機せずに即リターン（またはシミュレーション遅延を入れることも検討）
-            # 現状はログも出さずにスキップするだけに留める（ログがうるさくなるため）
             return
         
         deadline = time.time() + timeout
-        print("[Plotter] sync start")
+        # print("[Plotter] sync start (Waiting for Idle)") 
         try:
             while time.time() < deadline:
                 try:
@@ -302,27 +324,25 @@ class Plotter:
                 except Exception as e:
                     print(f"[Plotter] sync write error: {e}")
                     break
+                
                 start = time.time()
-                while time.time() - start < 0.5:
+                while time.time() - start < 0.2: # 読み取りタイムアウト短縮
                     try:
                         line = self.ser.readline().decode('utf-8', errors='ignore').strip()
                     except Exception:
                         line = ''
                     if not line:
-                        time.sleep(0.02)
                         continue
-                    print(f"[Plotter] ステータス応答: {line}")
-                    if ('Idle' in line):
-                        print("[Plotter] 移動が完了しました")
-                        print("[Plotter] sync end")
+                    
+                    # ★修正: Idle のみを完了とみなす
+                    if 'Idle' in line:
+                        # print("[Plotter] sync complete (Idle detected)")
                         return
-                time.sleep(0.1)
-            print(f"[Plotter] sync タイムアウト ({timeout}s)。続行します。")
+            # print(f"[Plotter] sync タイムアウト ({timeout}s)。続行します。")
         except KeyboardInterrupt:
             print("処理を中断しました（sync）。")
         except Exception as e:
             print(f"[Plotter] sync 予期せぬエラー: {e}")
-        print("[Plotter] sync end")
 
 # --- 記録再生 -----------------------------------------------------------------------
 def play_recorded_file(filename, pl, sp):
@@ -371,18 +391,12 @@ def play_recorded_file(filename, pl, sp):
                         plotter_line = ' '.join(tokens)
                         speaker_cmd = None
                     
-                    # Plotterへの送信 (serがNoneなら内部でスキップされる)
+                    # Plotterへの送信
                     if pl:
-                         try:
-                            # ログは write 内部で出力条件分岐済みだが、sync呼び出し前に確認
-                            if pl.ser:
-                                print(f"[{lineno}] プロッタへ送信: {plotter_line}")
-                            #pl.write(None, None, None, None) # ※注意: この関数play_recorded_fileは元の設計で pl.write を直接呼んでいない。
-                            # 元コードでは _safe_serial_write(pl.ser, plotter_line) を呼んでいたため、
-                            # クラスメソッドではなく直接送信していました。修正します。
-                            _safe_serial_write(pl.ser, plotter_line) 
-                            pl.sync()
-                         except Exception as e:
+                        try:
+                            # ★修正2: 再生時も send_stream を使用して滑らかに動かす
+                            pl.send_stream(plotter_line)
+                        except Exception as e:
                             print(f"[{lineno}] プロッタ送信エラー: {e}")
                     
                     if speaker_cmd:
@@ -435,7 +449,6 @@ def main():
                 ser2 = select_port("プロッタ")
                 if ser2 is None:
                     print("プロッタポートが開けません。終了します。")
-                    # 開いていたスピーカも閉じる
                     if ser1: ser1.close()
                     return
             else:
@@ -469,18 +482,25 @@ def main():
                         cmd = tmp[0]
                         if cmd in ("A1","A2"):
                             data = pl.mapping(tmp)
-                            print(f"変換後: {data}")
                             center_x, center_y, feed = data
                             plot_line = f"G1 X{center_x:.3f} Y{center_y:.3f} F{int(feed)}"
+                            
                             _save_record([line], plot_line)
+                            
                             if not (RECORD_FILE and not RECORD_EXECUTE):
                                 if branch:
                                     pl.down()
                                     branch = 0
-                                pl.write(center_x, center_y, feed, branch)
+                                
+                                # ★修正3: 通常書き込みではなく send_stream を使う
+                                pl.send_stream(plot_line)
                                 sp.write(line)
                             else:
                                 print("保存のみモード: 実行をスキップ")
+                            
+                            # ★重要: ここにあった pl.sync() を削除しました
+                            # これにより、プロッタが停止するのを待たずに次の行へ進みます
+
                         elif cmd == "A0":
                             data = pl.mapping(tmp)
                             print(f"変換後: {data}")
@@ -494,7 +514,12 @@ def main():
                                     sp.play_a0_sound(STROKE_COUNT)
                                 except Exception as e:
                                     print(f"A0 音声再生エラー: {e}")
+                                
+                                # A0(移動)は一区切りなので、ここは sync して確実に移動完了を待ってもOK
+                                # 滑らかに繋げたい場合はここも send_stream にしても良いですが、
+                                # 筆を下ろす前の位置決めなので、安全のため sync を推奨します。
                                 pl.write(data[0], data[1], data[2], 1)
+                                pl.sync() # 移動完了待ち
                                 time.sleep(0.5)
                             else:
                                 print("保存のみモード: A0 実行をスキップ")
@@ -516,7 +541,9 @@ def main():
                                 print("保存のみモード: D1 実行をスキップ")
                         else:
                             print("形式が不正\n")
-                        pl.sync()
+                        
+                        # ループ末尾の共通 sync も削除（A0などで個別に呼んでいるため）
+                        # pl.sync() 
         except KeyboardInterrupt:
             print("処理を中断しました。")
         except Exception as e:
