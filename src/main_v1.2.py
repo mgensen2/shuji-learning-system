@@ -312,7 +312,7 @@ class Plotter:
                         time.sleep(0.02)
                         continue
                     print(f"[Plotter] ステータス応答: {line}")
-                    if ('Idle' in line) or line.lower().startswith('ok'):
+                    if ('Idle' in line) :
                         print("[Plotter] 移動が完了しました")
                         print("[Plotter] sync end")
                         return
