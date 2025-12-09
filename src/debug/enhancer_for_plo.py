@@ -526,7 +526,7 @@ class PlotterCsvEnhancer(tk.Tk):
                 prev_x, prev_y = x, y
             
             else:
-                 prev_x, prev_y = x, y
+                prev_x, prev_y = x, y
 
 if __name__ == "__main__":
     app = PlotterCsvEnhancer()
