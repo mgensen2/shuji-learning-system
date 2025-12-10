@@ -8,8 +8,6 @@ import subprocess
 import re
 
 # --- 設定: 永字八法の定義 ---
-# cmd_file: プロッタ/スピーカへの命令ファイル
-# voice_file: 事前に流す解説音声ファイル
 EIJI_PRINCIPLES = {
     1: {"name": "側 (ソク - 点)",         "cmd_file": "1_soku.txt",  "voice_file": "soku.wav"},
     2: {"name": "勒 (ロク - 横画)",       "cmd_file": "2_roku.txt",  "voice_file": "roku.wav"},
@@ -19,7 +17,6 @@ EIJI_PRINCIPLES = {
     6: {"name": "掠 (リャク - 左はらい)", "cmd_file": "6_ryaku.txt", "voice_file": "ryaku.wav"},
     7: {"name": "啄 (タク - 短い左はらい)","cmd_file": "7_taku1.txt", "voice_file": "aku1.wav"},
     8: {"name": "磔 (タク - 右はらい)",   "cmd_file": "8_taku2.txt", "voice_file": "aku2.wav"},
-    # テスト用に追加
     9: {"name": "テスト (cho.txt)",       "cmd_file": "cho.txt",     "voice_file": "voice_test.mp3"},
 }
 
@@ -42,7 +39,7 @@ def _safe_serial_write(ser, text):
         print(f"_safe_serial_write error: {e}")
 
 def _play_sound_file(path, wait=False):
-    """音声再生 (省略: 前回のコードと同様)"""
+    """音声再生"""
     if not os.path.exists(path):
         if wait: time.sleep(1)
         return
@@ -52,7 +49,7 @@ def _play_sound_file(path, wait=False):
             subprocess.run(['afplay', path]) if wait else subprocess.Popen(['afplay', path])
         elif sys.platform.startswith('win'):
             cmd = f"(New-Object Media.SoundPlayer '{path}').PlaySync()" if wait else f"(New-Object Media.SoundPlayer '{path}').Play()"
-            subprocess.run(['powershell', '-c', cmd])
+            subprocess.run(['powershell', '-c', cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             cmd = ['aplay', path]
             subprocess.run(cmd) if wait else subprocess.Popen(cmd)
@@ -92,42 +89,75 @@ class Plotter:
         self.ser = ser
 
     def write_raw(self, gcode):
-        """生のGコードを送信"""
+        """生のGコードを送信 (応答を待たない / 初期化用)"""
         text = str(gcode).strip()
         if not text: return
         _safe_serial_write(self.ser, text)
-        print(f"[Plotter] 送信: {text}")
+        print(f"[Plotter] 送信(Raw): {text}")
+
+    # ★追加: ストリーミング配信用メソッド
+    def send_stream(self, command):
+        """コマンドを送信し、'ok' が返ってくるまで待機する（動きの完了は待たない）"""
+        if not self.ser:
+            return
+        
+        line = str(command).strip()
+        _safe_serial_write(self.ser, line)
+        # print(f"[Plotter] Stream送信: {line}") # ログが多すぎる場合はコメントアウト
+
+        # GRBLからの 'ok' を待つ
+        while True:
+            try:
+                resp = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                if resp == 'ok':
+                    break # okが来たら即座に次へ（動きは止まらない）
+                if resp.lower().startswith('error'):
+                    print(f"[Plotter] Error受信: {resp}")
+                    break
+            except Exception:
+                pass
 
     def reset(self):
         self.write_raw("G0 X0 Y0 Z0")
 
     def sync(self, timeout=10.0):
-        """GRBLのIdle状態を待機"""
+        """
+        GRBLの動きが完全に止まる(Idle状態)まで待機
+        ★重要: 'ok' は無視して 'Idle' だけを見るように変更
+        """
         if not self.ser: return
         deadline = time.time() + timeout
+        # print("[Plotter] sync start (Waiting for Idle)")
         try:
             while time.time() < deadline:
-                self.ser.write(b'?\n')
-                time.sleep(0.1)
-                while self.ser.in_waiting > 0:
-                    line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                    if ('Idle' in line) or line.startswith('ok'):
-                        return
-        except Exception:
-            pass
+                try:
+                    self.ser.write(b'?\n')
+                except:
+                    break
+                
+                start_read = time.time()
+                while time.time() - start_read < 0.2:
+                    try:
+                        line = self.ser.readline().decode('utf-8', errors='ignore').strip()
+                        if not line: continue
+                        
+                        # ★修正: Idle のみを完了とみなす
+                        if 'Idle' in line:
+                            return
+                    except Exception:
+                        pass
+                time.sleep(0.05)
+        except Exception as e:
+            print(f"Sync error: {e}")
 
-# --- 実行ロジック (ここを修正) ---
+# --- 実行ロジック ---
 
 def parse_and_execute_line(line, pl, sp):
     """
-    cho.txtのような複合形式の行を解析して実行する
-    形式例:
-      1. G0 X-156.07 ...           -> プロッタのみ
-      2. S A2 18 ...               -> スピーカのみ (先頭S除去)
-      3. G1 ... F1592  A2 ...      -> プロッタ + スピーカ (タブ/スペース区切り)
+    1行を解析して実行する
+    ★変更: sync() を削除し、send_stream() を使用してカクつきを防止
     """
     line = line.strip()
-    # コメント行や空行はスキップ
     if not line or line.startswith('#') or line.startswith('['):
         return
 
@@ -136,43 +166,35 @@ def parse_and_execute_line(line, pl, sp):
 
     # パターン判定
     if line.startswith('S '):
-        # スピーカ単独コマンド (例: "S A2 ...")
-        # 先頭の "S " を取り除く
+        # スピーカ単独コマンド
         speaker_part = line[2:].strip()
     
     elif line.startswith('G'):
-        # Gコードを含む行。スピーカコマンドが後ろについているか確認
-        # "A2" や "A1" が出現する位置で分割を試みる
-        # タブ区切りの場合が多いが、スペース区切りの可能性も考慮して正規表現で分割
-        
-        # 正規表現: Gコード部分と、Aから始まるスピーカ部分を分離
-        # 例: "G1 ... F1000   A2 ..." -> group1="G1...F1000", group2="A2 ..."
+        # Gコードを含む行
         match = re.search(r'(G[0-9].*?)\s+(A[0-9].*)', line)
-        
         if match:
             gcode_part = match.group(1).strip()
             speaker_part = match.group(2).strip()
         else:
-            # スピーカコマンドがない純粋なGコード
             gcode_part = line
 
     # --- 実行 ---
     
-    # 1. プロッタ動作開始 (Gコードがある場合)
+    # 1. プロッタ動作 (Gコードがある場合)
     if gcode_part:
-        pl.write_raw(gcode_part)
+        # ★修正: write_raw + sync ではなく、send_stream を使う
+        pl.send_stream(gcode_part)
     
     # 2. スピーカ命令送信 (ある場合)
-    # プロッタが動き出した直後、あるいは同時に音を出す
     if speaker_part:
         sp.write(speaker_part)
     
-    # 3. 同期 (プロッタが動いた場合のみ待機)
-    if gcode_part:
-        pl.sync()
-    else:
-        # スピーカ単独の場合は少し待つ (コマンドによるが、ここでは短時間)
-        time.sleep(0.05)
+    # ★修正: ここにあった pl.sync() を削除しました
+    # これによりプロッタが移動中でも次の行の命令を送り込みます
+
+    if not gcode_part and speaker_part:
+        # スピーカ単独の場合は、送ってすぐに次に行くと早すぎる場合があるので少しだけ待つ
+        time.sleep(0.02)
 
 
 def execute_file(filename, pl, sp):
@@ -183,7 +205,7 @@ def execute_file(filename, pl, sp):
 
     print(f"動作開始: {filename}")
     
-    # 初期化
+    # 初期化 (ここは安全のため sync する)
     pl.reset()
     pl.sync()
 
@@ -197,10 +219,9 @@ def execute_file(filename, pl, sp):
     except Exception as e:
         print(f" エラー: {e}")
     
-    # 終了処理
-    pl.write_raw("G0 Z0") # ペン上げ
-    pl.reset()
-    pl.sync()
+    # 終了処理 (最後にペンを上げて、動きが止まるまで待つ)
+    pl.send_stream("G0 Z0") # ペン上げも stream で送る
+    pl.sync()               # 全ての動作が終わるまで待機
     print("完了\n")
 
 
@@ -222,7 +243,7 @@ def run_principle(p_id, pl, sp):
 
 # --- メイン ---
 def main():
-    print("=== 永字八法 学習システム (Raw G-code対応版) ===")
+    print("=== 永字八法 学習システム (Smooth Motion Ver.) ===")
     
     sp_ser = select_port("スピーカアレイ設定")
     if not sp_ser: return
@@ -240,7 +261,6 @@ def main():
     try:
         while True:
             print("\nメニュー:")
-            # 定義されている法を表示
             for k, v in EIJI_PRINCIPLES.items():
                 print(f"  {k}: {v['name']}")
             print("  q: 終了")
@@ -257,7 +277,7 @@ def main():
 
     finally:
         pl.write_raw("G0 Z0")
-        pl.reset()
+        pl.sync() # 終了時も待機
         sp_ser.close()
         pl_ser.close()
 
