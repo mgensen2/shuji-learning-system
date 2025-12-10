@@ -3,7 +3,6 @@ from serial.tools import list_ports
 import time
 import os
 import sys
-import shutil
 import subprocess
 import re
 
@@ -95,7 +94,6 @@ class Plotter:
         _safe_serial_write(self.ser, text)
         print(f"[Plotter] 送信(Raw): {text}")
 
-    # ★追加: ストリーミング配信用メソッド
     def send_stream(self, command):
         """コマンドを送信し、'ok' が返ってくるまで待機する（動きの完了は待たない）"""
         if not self.ser:
@@ -103,14 +101,12 @@ class Plotter:
         
         line = str(command).strip()
         _safe_serial_write(self.ser, line)
-        # print(f"[Plotter] Stream送信: {line}") # ログが多すぎる場合はコメントアウト
 
-        # GRBLからの 'ok' を待つ
         while True:
             try:
                 resp = self.ser.readline().decode('utf-8', errors='ignore').strip()
                 if resp == 'ok':
-                    break # okが来たら即座に次へ（動きは止まらない）
+                    break 
                 if resp.lower().startswith('error'):
                     print(f"[Plotter] Error受信: {resp}")
                     break
@@ -118,16 +114,14 @@ class Plotter:
                 pass
 
     def reset(self):
-        self.write_raw("G0 X0 Y0 Z0")
+        """原点復帰 (Z0にしてからX0Y0へ)"""
+        self.send_stream("G0 Z0") # ペンを上げる
+        self.send_stream("G0 X0 Y0")
 
     def sync(self, timeout=10.0):
-        """
-        GRBLの動きが完全に止まる(Idle状態)まで待機
-        ★重要: 'ok' は無視して 'Idle' だけを見るように変更
-        """
+        """GRBLの動きが完全に止まる(Idle状態)まで待機"""
         if not self.ser: return
         deadline = time.time() + timeout
-        # print("[Plotter] sync start (Waiting for Idle)")
         try:
             while time.time() < deadline:
                 try:
@@ -140,8 +134,6 @@ class Plotter:
                     try:
                         line = self.ser.readline().decode('utf-8', errors='ignore').strip()
                         if not line: continue
-                        
-                        # ★修正: Idle のみを完了とみなす
                         if 'Idle' in line:
                             return
                     except Exception:
@@ -153,10 +145,7 @@ class Plotter:
 # --- 実行ロジック ---
 
 def parse_and_execute_line(line, pl, sp):
-    """
-    1行を解析して実行する
-    ★変更: sync() を削除し、send_stream() を使用してカクつきを防止
-    """
+    """1行を解析して実行する"""
     line = line.strip()
     if not line or line.startswith('#') or line.startswith('['):
         return
@@ -164,13 +153,9 @@ def parse_and_execute_line(line, pl, sp):
     gcode_part = None
     speaker_part = None
 
-    # パターン判定
     if line.startswith('S '):
-        # スピーカ単独コマンド
         speaker_part = line[2:].strip()
-    
     elif line.startswith('G'):
-        # Gコードを含む行
         match = re.search(r'(G[0-9].*?)\s+(A[0-9].*)', line)
         if match:
             gcode_part = match.group(1).strip()
@@ -178,22 +163,13 @@ def parse_and_execute_line(line, pl, sp):
         else:
             gcode_part = line
 
-    # --- 実行 ---
-    
-    # 1. プロッタ動作 (Gコードがある場合)
     if gcode_part:
-        # ★修正: write_raw + sync ではなく、send_stream を使う
         pl.send_stream(gcode_part)
     
-    # 2. スピーカ命令送信 (ある場合)
     if speaker_part:
         sp.write(speaker_part)
     
-    # ★修正: ここにあった pl.sync() を削除しました
-    # これによりプロッタが移動中でも次の行の命令を送り込みます
-
     if not gcode_part and speaker_part:
-        # スピーカ単独の場合は、送ってすぐに次に行くと早すぎる場合があるので少しだけ待つ
         time.sleep(0.02)
 
 
@@ -205,8 +181,7 @@ def execute_file(filename, pl, sp):
 
     print(f"動作開始: {filename}")
     
-    # 初期化 (ここは安全のため sync する)
-    pl.reset()
+    # 動作前にIdle確認
     pl.sync()
 
     try:
@@ -219,20 +194,23 @@ def execute_file(filename, pl, sp):
     except Exception as e:
         print(f" エラー: {e}")
     
-    # 終了処理 (最後にペンを上げて、動きが止まるまで待つ)
-    pl.send_stream("G0 Z0") # ペン上げも stream で送る
-    pl.sync()               # 全ての動作が終わるまで待機
+    # 終了処理 (ペンを上げて待機)
+    pl.send_stream("G0 Z0") 
+    pl.sync() 
     print("完了\n")
 
 
-def run_principle(p_id, pl, sp):
-    """ひとつの法を実行する"""
+def run_principle(p_id, pl, sp, return_home=True):
+    """
+    ひとつの法を実行する
+    return_home: Trueなら実行後に原点(X0Y0)に戻る
+    """
     info = EIJI_PRINCIPLES.get(p_id)
     if not info: return
 
     print(f"\n=== {info['name']} ===")
     
-    # 解説音声 (あれば)
+    # 解説音声
     if info.get('voice_file'):
         print("解説音声を再生します...")
         _play_sound_file(info['voice_file'], wait=True)
@@ -240,6 +218,28 @@ def run_principle(p_id, pl, sp):
     # 動作実行
     print("動作を開始します...")
     execute_file(info['cmd_file'], pl, sp)
+
+    # ★変更点: フラグがTrueなら原点に戻る
+    if return_home:
+        print("原点へ復帰します...")
+        pl.reset()
+        pl.sync()
+
+def run_all_principles(pl, sp):
+    """★追加: 全工程を連続実行する"""
+    print("\n====== 永字八法 連続再生モード ======")
+    
+    # 1番から8番までを対象とする（9番のテストは除外）
+    target_ids = sorted([k for k in EIJI_PRINCIPLES.keys() if k != 9])
+    
+    for pid in target_ids:
+        # 連続実行中は、筆の流れを維持するため各画ごとの原点復帰は行わない
+        run_principle(pid, pl, sp, return_home=False)
+        time.sleep(0.5) # 次の画への少しの間
+        
+    print("\n全工程完了。原点へ復帰します。")
+    pl.reset()
+    pl.sync()
 
 # --- メイン ---
 def main():
@@ -257,27 +257,36 @@ def main():
 
     time.sleep(2)
     pl.reset()
+    pl.sync()
 
     try:
         while True:
             print("\nメニュー:")
-            for k, v in EIJI_PRINCIPLES.items():
-                print(f"  {k}: {v['name']}")
+            # 辞書順に表示
+            for k in sorted(EIJI_PRINCIPLES.keys()):
+                print(f"  {k}: {EIJI_PRINCIPLES[k]['name']}")
+            print("  a: 全てを連続再生 (1〜8)")
             print("  q: 終了")
             
             choice = input("選択 >> ").strip().lower()
-            if choice == 'q': break
-            
-            try:
-                pid = int(choice)
-                if pid in EIJI_PRINCIPLES:
-                    run_principle(pid, pl, sp)
-            except ValueError:
-                pass
+            if choice == 'q':
+                break
+            elif choice == 'a':
+                # ★追加: 連続再生
+                run_all_principles(pl, sp)
+            else:
+                try:
+                    pid = int(choice)
+                    if pid in EIJI_PRINCIPLES:
+                        # ★変更: 個別実行時は必ず原点に戻る
+                        run_principle(pid, pl, sp, return_home=True)
+                except ValueError:
+                    pass
 
     finally:
-        pl.write_raw("G0 Z0")
-        pl.sync() # 終了時も待機
+        print("システム終了処理中...")
+        pl.reset()
+        pl.sync()
         sp_ser.close()
         pl_ser.close()
 
