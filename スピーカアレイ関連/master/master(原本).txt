@@ -1,0 +1,1180 @@
+/*
+コンパイル時v3.0.x系列で行うこと
+*/
+#include <esp_now.h>
+#include <WiFi.h>
+
+esp_now_peer_info_t slave;
+
+uint8_t temp;
+uint8_t temp2;
+uint8_t temp3;
+uint8_t temp4;
+uint8_t temp5;
+uint8_t temp6;
+
+// 送信コールバック
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+           mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+  Serial.print("Last Packet Sent to: ");
+  Serial.println(macStr);
+  Serial.print("Last Packet Send Status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // ESP-NOW初期化
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  if (esp_now_init() == ESP_OK) {
+    Serial.println("ESPNow Init Success");
+  } else {
+    Serial.println("ESPNow Init Failed");
+    ESP.restart();
+  }
+
+  // マルチキャスト用Slave登録
+  memset(&slave, 0, sizeof(slave));
+  for (int i = 0; i < 6; ++i) {
+    slave.peer_addr[i] = (uint8_t)0xff;
+  }
+  
+  esp_err_t addStatus = esp_now_add_peer(&slave);
+  if (addStatus == ESP_OK) {
+    // Pair success
+    Serial.println("Pair success");
+  }
+  // ESP-NOWコールバック登録
+  esp_now_register_send_cb(OnDataSent);
+
+  delay(1000);
+}
+
+
+void loop() {
+
+  uint8_t data[6];
+  //uint8_t temp;
+
+  if(Serial.available()){ //バッファに6バイトデータがあるなら
+    String temp; 
+    temp = Serial.readStringUntil('\n');  //ver14.5修正後 改行するまで文字列を使用
+    //temp = AsciiToDec(Serial.read());
+    //temp = Serial.read();
+    //Serial.println(temp, DEC);
+    //temp.toInt();
+    ReplayUnit(temp.toInt());
+    
+    /**
+    temp2 = AsciiToDec(Serial.read());
+    Serial.println(temp2, DEC);
+    temp3 = AsciiToDec(Serial.read());
+    Serial.println(temp3, DEC);
+    temp4 = AsciiToDec(Serial.read());
+    Serial.println(temp4, DEC);
+    temp5 = AsciiToDec(Serial.read());
+    Serial.println(temp5, DEC);
+    temp6 = AsciiToDec(Serial.read());
+    Serial.println(temp6, DEC);
+
+    data[0] = temp;
+    data[1] = temp2;
+    data[2] = temp3;
+    data[3] = temp4;
+    data[4] = temp5;
+    data[5] = temp6;
+    esp_err_t result = esp_now_send(slave.peer_addr, data, sizeof(data));
+    Serial.print("Send Status: ");
+    if (result == ESP_OK) {
+      Serial.println("Success");
+    } else if (result == ESP_ERR_ESPNOW_NOT_INIT) {
+      Serial.println("ESPNOW not Init.");
+    } else if (result == ESP_ERR_ESPNOW_ARG) {
+      Serial.println("Invalid Argument");
+    } else if (result == ESP_ERR_ESPNOW_INTERNAL) {
+      Serial.println("Internal Error");
+    } else if (result == ESP_ERR_ESPNOW_NO_MEM) {
+      Serial.println("ESP_ERR_ESPNOW_NO_MEM");
+    } else if (result == ESP_ERR_ESPNOW_NOT_FOUND) {
+      Serial.println("Peer not found.");
+    } else {
+      Serial.println("Not sure what happened");
+    }
+    delay(15000);
+    Serial.println("next_ok");
+    
+    data[0] = 1;
+    data[1] = 1;
+    data[2] = 0;
+    data[3] = 0;
+    data[4] = 0;
+    data[5] = 1;
+    esp_now_send(slave.peer_addr, data, sizeof(data));
+    
+    delay(1000);
+
+    data[0] = 1;
+    data[1] = 1;
+    data[2] = 0;
+    data[3] = 0;
+    data[4] = 0;
+    data[5] = 2;
+    esp_now_send(slave.peer_addr, data, sizeof(data));
+    
+    delay(1000);
+
+    data[0] = 1;
+    data[1] = 1;
+    data[2] = 0;
+    data[3] = 0;
+    data[4] = 0;
+    data[5] = 4;
+    esp_now_send(slave.peer_addr, data, sizeof(data));
+
+    /**
+    if(temp6 == '2'){
+      squere();
+    }else if(temp6 == 3){
+      Serial.println("c.c.");
+      cc();
+    }else{
+      //300151
+      Serial.println("circle");
+      circle();
+    }
+    **/
+  }
+  
+}
+
+
+uint8_t AsciiToDec(uint8_t ascii){
+  
+  return ascii - '0';
+
+}
+
+
+void squere(){
+
+  uint8_t data[5];
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 1;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 2;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 1;
+  data[3] = 0;
+  data[4] = 2;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 2;
+  data[3] = 0;
+  data[4] = 2;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 1;
+  data[3] = 0;
+  data[4] = 3;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 2;
+  data[3] = 0;
+  data[4] = 3;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 1;
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 2;
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(1000);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 4;
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 'P';
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 'p';
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 2;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 'P';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 4;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 'p';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(1000);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 8;
+  data[4] = 4;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 'p';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 3;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 8;
+  data[4] = 3;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 'p';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 2;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 8;
+  data[4] = 2;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 'p';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 8;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(1000);
+  data[0] = 1;
+  data[1] = '@';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 8;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 1;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 4;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = '@';
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 8;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+}
+
+
+void circle(){
+
+  uint8_t data[5];
+
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 1;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 2;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 4;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 8;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = '@';
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 'P';
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 'p';
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 4;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 1;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 2;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 4;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 8;
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = '@';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 'P';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 'p';
+  data[2] = 0;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 8;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+}
+
+void cc(){
+  uint8_t data[5];
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 1;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(200);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 0;
+  data[3] = 2;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+  delay(500);
+  data[0] = 1;
+  data[1] = 0;
+  data[2] = 1;
+  data[3] = 0;
+  data[4] = 1;
+  esp_now_send(slave.peer_addr, data, sizeof(data));
+}
+
+
+void ReplayUnit(int unit){
+
+  uint8_t data[6];
+
+  switch(unit){
+
+    case 65:
+      data[0] = 5;
+      data[1] = 3;
+      data[2] = 2;
+      data[3] = 31;
+      data[4] = 63;
+      data[5] = 63;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      delay(15000);
+      Serial.println("hoge\n");
+      break;
+
+    case 0:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 1:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 1;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 2:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 2;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 3:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 1;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 4:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 2;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 5:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 1;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 6:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 2;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 7:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 1;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 8:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 2;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 9:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 4;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 10:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 8;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 11:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 4;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 12:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 8;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 13:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 4;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 14:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 8;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 15:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 4;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 16:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 8;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 17:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 16;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 18:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 32;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 19:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 16;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 20:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 32;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 21:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 16;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 22:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 32;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 23:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 16;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 24:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 0;
+      data[5] = 32;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 25:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 1;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 26:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 2;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 27:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 1;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 28:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 2;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 29:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 1;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 30:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 2;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 31:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 1;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 32:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 2;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 33:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 1;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 34:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 2;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 35:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 1;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 36:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 2;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 37:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 1;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 38:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 2;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 39:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 1;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 40:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 2;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 41:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 4;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 42:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 8;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 43:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 4;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 44:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 8;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 45:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 4;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 46:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 8;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 47:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 4;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 48:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 8;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 49:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 16;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 50:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 32;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 51:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 16;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 52:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 32;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 53:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 16;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 54:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 32;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 55:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 16;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 56:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 0;
+      data[4] = 32;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 57:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 4;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 58:
+      data[0] = 1;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 8;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 59:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 4;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 60:
+      data[0] = 2;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 8;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 61:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 4;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 62:
+      data[0] = 3;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 8;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 63:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 4;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    case 64:
+      data[0] = 4;
+      data[1] = 1;
+      data[2] = 0;
+      data[3] = 8;
+      data[4] = 0;
+      data[5] = 0;
+      esp_now_send(slave.peer_addr, data, sizeof(data));
+      break;
+
+    default:
+      break;
+
+  }
+
+}

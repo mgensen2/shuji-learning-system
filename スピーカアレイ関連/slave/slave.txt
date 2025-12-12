@@ -1,0 +1,1280 @@
+/*
+引継ぎわっしょい
+64個のスピーカユニットに書き込むプログラム.
+新たな機能はloop部に付け足していくとよい.
+64個のプログラムを書き換えるのは面倒なので, 今後はOTAに対応させると楽になります.
+スパゲッティコード化しているので, 修正してね.
+23行目あたりにスピーカユニットのアドレスがある.
+*/
+
+
+//#include <CAN.h> //以前使用していたライブラリ
+#include <driver/dac.h>
+#include <driver/i2s.h>
+#include <math.h>
+#include <stdlib.h>
+#include "driver/gpio.h"
+#include "driver/twai.h"
+
+#include "wavData.h" //ホワイトノイズのデータ
+
+/************ユニットID********************/
+uint16_t myAddress = 0b0000000100000000; //スピーカユニットのアドレスはここを書き換える.
+//uint16_t myAddress 0b6000200080004001; //ケタ確認用
+/*****************************************/
+
+typedef struct { //正弦波のプロパティ
+  uint16_t fs; //サンプリング周波数
+  int bits; //量子化ビット
+  uint16_t length; //データ量
+  uint16_t f; //周波数
+  float a; //振幅
+}Sinusoidal;
+
+Sinusoidal sinusoidal; //インスタンス
+
+unsigned char *data; //正弦波のデータを格納するポインタ
+
+uint8_t readSinusoidal[8]; //sin波のプロパティ格納
+unsigned char storeSinusoidal[100000];
+unsigned char clickvs[2000];
+size_t zero_bytes = 0;
+
+uint8_t readVolume[8];
+
+static const i2s_port_t i2s_num = I2S_NUM_1;
+unsigned const char *TheData;
+uint32_t DataIdx = 0;
+
+//unsigned char whiteNoise[100000];
+unsigned char *whiteNoise;
+
+
+int i = 0;
+
+uint32_t hogeeee = 0;
+
+
+/*
+ *プログラム実行時間測定変数
+ *現在は使用していない.
+ */
+int count = 0;
+//int start = 0;
+unsigned long starttime;
+unsigned long endtime;
+
+
+/*
+ *WAVファイルのヘッダを格納する変数
+ */
+uint32_t chunkSize;
+uint16_t numChannels;
+uint32_t sampleRate;
+uint16_t bitsPerSample;
+uint8_t hoge = 50;
+uint32_t length = 100000;
+
+uint8_t temp;
+
+uint8_t  data8;
+uint16_t data16;
+
+//uint64_t myData = 0b10000000000000000;//1000hz
+
+uint8_t  left;
+//uint8_t  right;
+uint16_t delayus;
+
+
+/*
+ *コア間通信制御変数
+ */
+uint32_t receive_id = 0;
+byte music = 1;
+byte white = 2;
+byte start = 3;
+byte whiteNoiseChangeVolume = 5;
+byte bandpass = 6;
+byte playSinusoidal = 7;
+byte sinmusic = 8;
+byte stop = 4;
+byte receive[1];
+
+
+double fc = 10000;
+double fb = 1000;
+
+
+/*
+ *マルチコアのためのタスク設定
+ */
+TaskHandle_t taskHandle[1];
+QueueHandle_t xQueue_1;
+
+
+/**WAVのデータ解析**/
+struct WavHeader_Struct{
+  char RIFFSectionID[4];
+  uint32_t Size;
+  char RiffFormat[4];
+  char FormatSectionID[4];
+  uint32_t FormatSize;
+  uint16_t FormatID;
+  uint16_t NumChannels;
+  uint32_t SampleRate;
+  uint32_t byteRate;
+  uint16_t ClockAlign;
+  uint16_t BitsPerSample;
+  char DataSectionID[4];
+  uint32_t DataSize;
+}WavHeader;
+
+
+/**I2Sの設定**/
+static const i2s_config_t i2s_config = {
+  .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+  .sample_rate = 44100,
+  .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+  .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,//I2S_CHANNEL_FMT_ALL_LEFT,
+  .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
+  .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+  .dma_buf_count = 8,//16, 8, 2
+  .dma_buf_len = 32,//1024,16, 64
+  .use_apll = true,
+  //.tx_desc_auto_clear = true,
+  //.fixed_mclk = -1
+};
+
+
+/**I2Sのピン設定**/
+static const i2s_pin_config_t pin_config = {
+  .bck_io_num = 27,
+  .ws_io_num = 26,
+  .data_out_num = 14,
+  .data_in_num = I2S_PIN_NO_CHANGE
+};
+
+
+/*
+*リアルタイムでフェードアウトする.
+*触図との併用時に使用する. ok
+*/
+int ProtoPlay(unsigned char *audio, uint32_t length, int mode, int volume){
+
+  size_t BytesWritten;
+  uint16_t readByte = 0;
+  double temp = 0;
+  int i = 0;
+  int16_t hoge = 0;
+  uint8_t writeData[2];
+  float fadeFactor;
+
+  //Serial.println(mode);
+  //Serial.println(volume);
+    
+  switch(mode){
+
+    case 0:
+
+      while(1){
+        for(int m = 0; m < 88200; m+=2){
+          i2s_write(i2s_num, audio + 44 + m, 2, &BytesWritten, portMAX_DELAY);
+          //readByte += 2;
+          if(uxQueueMessagesWaiting(xQueue_1) && m < 88100){ //キューにデータがプッシュされると, フェード処理
+        //if(uxQueueMessagesWaiting(xQueue_1)){
+        //if(readByte == 60000){
+        //Serial.println(readByte); // デバッグ
+            for(int n = 0; n < sinusoidal.fs * 0.01; n++){
+
+              hoge = *(audio + 44 + m + 2 + i) + (*(audio + 44 + m + 2 + i + 1) << 8);
+              fadeFactor = (float)(440 - n) / (sinusoidal.fs * 0.01); // フェードアウト
+              hoge = (int16_t)(hoge * fadeFactor); // 符号付き16ビット整数で計算
+
+              // クリッピング処理
+              //hoge = std::max(std::min(hoge, (int16_t)32767), (int16_t)-32768);
+
+              writeData[0] = (uint8_t)(hoge & 0xFF); // 低バイト
+              writeData[1] = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+              //Serial.println(writeData[0]); // デバッグ
+              //Serial.println(writeData[1]); // デバッグ
+
+              i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+              i += 2;
+
+            }
+            i2s_write(i2s_num, clickvs, 1000, &BytesWritten, portMAX_DELAY);
+            i2s_zero_dma_buffer(i2s_num);
+            //Serial.println("muho"); // デバッグ
+            //vQueueDelete(xQueue_1);
+            return 0;
+            }
+        }
+      
+      }
+
+      break;
+    
+    case 1:
+      while(1){
+        for(int m = 0; m < 88200 ; m+=2){ //格納されたのボリューム計算
+
+          //Serial.println(pgm_read_byte(WavData + n + 44), HEX); //デバッグ
+          //Serial.println(pgm_read_byte(WavData + n + 1 + 44), HEX); //デバッグ
+
+          hoge = *(audio+ m + 44) + (*(audio + 44 + m + 1) << 8);
+          hoge /= (volume * 0.1); // ボリュームを上げる
+
+          writeData[0] = (uint8_t)(hoge & 0xFF); // 低バイト
+          writeData[1] = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+          //Serial.println(writeData[0]); // デバッグ
+          //Serial.println(writeData[1]); // デバッグ
+
+          i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+          if(uxQueueMessagesWaiting(xQueue_1) && m < 88100){ //キューにデータがプッシュされると, フェード処理
+            for(int n = 0; n < sinusoidal.fs * 0.01; n++){
+
+              hoge = *(audio + 44 + m + 2 + i) + (*(audio + 44 + m + 2 + i + 1) << 8);
+              fadeFactor = (float)(440 - n) / (sinusoidal.fs * 0.01); // フェードアウト
+              hoge /= (volume * 0.1); // ボリュームを上げる
+              hoge = (int16_t)(hoge * fadeFactor); // 符号付き16ビット整数で計算
+
+              // クリッピング処理
+              //hoge = std::max(std::min(hoge, (int16_t)32767), (int16_t)-32768);
+
+              writeData[0] = (uint8_t)(hoge & 0xFF); // 低バイト
+              writeData[1] = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+              //Serial.println(writeData[0]); // デバッグ
+              //Serial.println(writeData[1]); // デバッグ
+
+              i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+              i += 2;
+
+            }
+            i2s_write(i2s_num, clickvs, 1000, &BytesWritten, portMAX_DELAY);
+            i2s_zero_dma_buffer(i2s_num);
+            //vQueueDelete(xQueue_1);
+            return 0;
+          }
+
+        }
+        //Serial.println("volumedown"); // デバック      
+      }
+
+      break;
+
+    case 2:
+      while(1){
+
+        for(int m = 0; m < 88200; m+=2){ // ホワイトノイズのボリューム計算
+
+          //Serial.println(pgm_read_byte(WavData + n + 44), HEX); // デバッグ
+          //Serial.println(pgm_read_byte(WavData + n + 1 + 44), HEX); // デバッグ
+
+          hoge = *(audio+ m + 44) + (*(audio + 44 + m + 1) << 8);
+          hoge *= (volume * 0.1); // ボリュームアップ
+
+          writeData[0] = (uint8_t)(hoge & 0xFF); // 低バイト
+          writeData[1] = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+          //Serial.println(writeData[0]); // デバッグ
+          //Serial.println(writeData[1]); // デバッグ
+
+          i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+          if(uxQueueMessagesWaiting(xQueue_1) && m < 88100){ //キューにデータがプッシュされると, フェード処理
+            for(int n = 0; n < sinusoidal.fs * 0.01; n++){
+
+              hoge = *(audio + 44 + m + 2 + i) + (*(audio + 44 + m + 2 + i + 1) << 8);
+              fadeFactor = (float)(440 - n) / (sinusoidal.fs * 0.01); // フェードアウト
+              hoge *= (volume * 0.1); // ボリュームを上げる
+              hoge = (int16_t)(hoge * fadeFactor); // 符号付き16ビット整数で計算
+
+              // クリッピング処理
+              //hoge = std::max(std::min(hoge, (int16_t)32767), (int16_t)-32768);
+
+              writeData[0] = (uint8_t)(hoge & 0xFF); // 低バイト
+              writeData[1] = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+              //Serial.println(writeData[0]); // デバッグ
+              //Serial.println(writeData[1]); // デバッグ
+
+              i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+              i += 2;
+
+            }
+            i2s_write(i2s_num, clickvs, 1000, &BytesWritten, portMAX_DELAY);
+            i2s_zero_dma_buffer(i2s_num);
+            //vQueueDelete(xQueue_1);
+            
+            return 0;
+          }
+
+        }       
+      
+      }
+      //Serial.println("volumeDown"); // デバッグ
+
+    default:
+      break;
+
+  }
+  
+  //i2s_write(i2s_num, clickvs, 882, &BytesWritten, portMAX_DELAY);
+  //i2s_zero_dma_buffer(i2s_num);
+  //Serial.println("finishSound");
+
+  return 0;
+
+}
+
+
+/*
+送ったデータをまとめて再生する関数
+途中で止められない.　
+*/
+int play(unsigned char *audio, uint32_t length ) {
+  
+  size_t BytesWritten;
+
+  while(1){
+    for(int n = 0; n < 88200; n += 2){
+      i2s_write(i2s_num, audio + 44 + n, 2, &BytesWritten, portMAX_DELAY);//cpuを介さずデータを読み出し(ポート,ソースアドレス,データサイズ,タイムアウトの格納,タイムアウトDMAに読み出し権限を与える
+      if(uxQueueMessagesWaiting(xQueue_1)){
+        i2s_zero_dma_buffer(i2s_num);
+        return 0;
+      }
+    
+    }
+  //i2s_stop(i2s_num);
+  }
+  
+  i2s_zero_dma_buffer(i2s_num);
+
+  //Serial.println(length);
+
+  return 0;
+
+}
+
+
+/*
+flashメモリにあるデータを再生, ホワイトノイズが格納されている.
+現在は使用していない.
+*/
+int playWhitenoise() {
+
+  size_t BytesWritten;
+  uint16_t readByte = 0;
+
+  while(1){
+
+    i2s_write(i2s_num, TheData + 44 + readByte, 2, &BytesWritten, portMAX_DELAY);
+    readByte += 2;
+    if(uxQueueMessagesWaiting(xQueue_1)){
+
+      break;
+
+    }
+  
+  }
+  //i2s_write(i2s_num, TheData + 44, 264600, &BytesWritten, portMAX_DELAY);
+
+  //i2s_stop(i2s_num);
+  i2s_zero_dma_buffer(i2s_num); // DMA バッファが空になったらクリア
+
+  //Serial.println(length);
+
+  return 0;
+
+}
+
+
+/*
+ * core1からpushされたキューにある値をcore2で取り出す関数（コア間通信)
+ */
+void task1(void *pvParameters){
+
+  while(1){
+
+    if(uxQueueMessagesWaiting(xQueue_1)){
+      
+      xQueueReceive(xQueue_1, receive, portMAX_DELAY); //キューからデータ取り出し, 変数receiveに格納
+      //Serial.println(uxQueueMessagesWaiting(xQueue_1)); 
+      //Serial.println(receive[0]);
+      
+      switch(receive[0]){
+        
+        case 1:
+          play(whiteNoise, length);
+          //ProtoPlay(whiteNoise, length);
+          //Serial.println(receive[0]);
+          break;
+
+        case 2:
+          playWhitenoise();
+          //Serial.println(receive[0]);
+          break;
+        
+        case 3:
+          ProtoPlay(whiteNoise, length, readVolume[4], readVolume[5]);
+          //Serial.println(receive[0]);
+          break;
+        
+        case 5:
+          SetVolume(0, readVolume[0]);
+          break;
+        
+        case 6:
+          BandPassIirFilter(fc, fb, readVolume[4], readVolume[5]);
+          break;
+        
+        case 7:
+          ProtoPlay(storeSinusoidal, length , readVolume[4], readVolume[5]);
+          break;
+        
+        case 8:
+          play(storeSinusoidal, length);
+          break;
+
+        default:
+          break;
+      
+      }
+    
+    }
+    //vQueueDelete(xQueue_1);//メッセージを削除
+    delay(1); //watchdogtimer対策
+  }
+
+}
+
+
+/*
+ *自身への命令かどうか判定する関数
+ */
+bool IsMyAddress(uint32_t receiveAddress){
+
+  uint16_t tempAddress = myAddress & (uint16_t)receiveAddress; 
+  
+  //Serial.println(tempAddress, BIN);
+  //Serial.println(myAddress, BIN);
+  
+  if(myAddress == tempAddress){
+    //Serial.println("true");
+    return true;
+  }
+
+  xQueueSend(xQueue_1, &stop, 0);
+
+  return false;
+  
+}
+
+
+/*
+ *命令分岐関数
+ */
+int IsMyCommand(uint32_t receiveAddress){
+
+  uint8_t tempAddress = (uint8_t)(receiveAddress >> 16); 
+  
+  //Serial.println(tempAddress, BIN); //デバック
+  //Serial.println(myAddress, BIN); //デバック
+
+  switch(tempAddress){
+
+    case 1: //再生
+      return 1;
+      break;
+
+    case 2: //音源停止
+      return 2;
+      break;
+
+    case 3: //音源格納
+      return 3;
+      break;
+
+    case 4: //音源データストップビット
+      return 4;
+      break;
+
+    case 5: //sin波生成
+      return 5;
+      break;
+
+    case 6: //sin波再生
+      return 6;
+      break;
+
+    case 7: //ホワイトノイズ再生
+      return 7;
+      break;
+
+    case 8: //ホワイトノイズ音量変更
+      //Serial.println("hoge");
+      return 8;
+      break;
+
+    case 9: //バッファクリア
+      return 9;
+      break;
+
+    case 10: //音源データリセット
+      return 10;
+      break;
+    
+    case 11: //アンプシャットダウン
+      return 11;
+      break;
+
+    case 12: //アンプスタートアップ
+      return 12;
+      break;
+    
+    case 13:
+      return 13;
+      break;
+
+    case 14: //バンドパス
+      return 14;
+      break;
+
+    case 15: //バンドパス
+      return 15;
+      break;
+
+    case 16: //フードアウト用読み出し
+      return 16;
+      break;
+    
+    case 17: //リアルタイムフェードアウト処理
+      return 17;
+      break;
+
+    case 18:
+      return 18;
+      break;
+
+    default:
+      return 0;
+
+  }
+  
+}
+
+
+/*
+自身への命令かどうか判定する関数
+現在は使用していない.
+*/
+/*
+bool IsMyData(int receiveAddress){
+
+  int tempAddress = myData & receiveAddress; 
+  
+  //Serial.println(tempAddress, BIN);
+  //Serial.println(myAddress, BIN);
+  
+  if(myData == tempAddress){
+    
+    return true;
+
+  }
+
+  return false;
+  
+}
+*/
+
+
+/* 
+WAVファイルかどうかの検証関数
+ヘッダを検証する.
+現在は使用していない. 
+*/
+bool ValidWavData(WavHeader_Struct* Wav){
+  
+  if(memcmp(Wav->RIFFSectionID, "RIFF", 4)!=0){
+    Serial.println("hoge1");
+    return false;
+  }
+  if(memcmp(Wav->RiffFormat, "WAVE", 4)!=0){
+    Serial.println("hoge2");
+    return false;
+  }
+  if(memcmp(Wav->FormatSectionID, "fmt", 3)!=0){
+    Serial.println("hoge3");
+    return false;
+  }
+  if(memcmp(Wav->DataSectionID, "data", 4)!=0){
+    Serial.println("hoge4");
+    return false;
+  }
+  if(Wav->FormatID!=1){
+    Serial.println("hoge5");
+    return false;
+  }
+  if(Wav->FormatSize!=16){
+    Serial.println("hoge6");
+    return false;
+  }
+  if((Wav->NumChannels!=1)&(Wav->NumChannels!=2)){
+    Serial.println("hoge7");
+    return false;
+  }
+  if(Wav->SampleRate>48000){
+    Serial.println("hoge8");
+    return false;
+  }
+  if((Wav->BitsPerSample!=32)&(Wav->BitsPerSample!=16)){
+    Serial.println("hoge9");
+    return false;
+  }
+
+  return true;
+
+}
+
+
+/*
+wavヘッダの出力
+現在は使用していない.
+*/
+void DumpWAVHeader(WavHeader_Struct* Wav){
+
+  if(memcmp(Wav->RIFFSectionID, "RIFF", 4)!=0){
+    //return;
+  }
+  if(memcmp(Wav->RiffFormat, "WAVE", 4)!=0){
+    //return;
+  }
+  if(memcmp(Wav->FormatSectionID, "fmt", 4)!=0){
+    //return;
+  }
+  if(memcmp(Wav->DataSectionID, "data", 4)!=0){
+    //return;
+  }
+
+}
+
+
+/*正弦波生成*/
+int CreateSinusoidal(unsigned char *data, uint16_t length, uint16_t f, float a){ //正弦波生成関数
+
+  double temp = 0;
+  int16_t hoge;
+  int i = 0;
+  
+  for(int n = 0; n < 44100; n++){ //振幅の範囲内で正弦波を生成
+    temp = (a/10) * sin(2.0 * 3.14 * f * n / sinusoidal.fs);
+    temp = 32767 * temp; // スケーリング 16383
+    hoge = (int16_t)temp; // 符号付き16ビット整数
+   
+    *(data + i) = (uint8_t)(hoge & 0xFF); // 低バイト
+    *(data + i + 1) = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+    //Serial.println(*(data + i));
+    //Serial.println(*(data + i + 1));
+    i += 2;
+  }
+
+  i = 0;
+  float fadeFactor;
+  for (int n = 0; n < sinusoidal.fs * 0.01; n++){ //音源の前後10[ms]をフェード処理(クリックノイズ対策)
+    hoge = *(data + i) + (*(data + i + 1) << 8);
+    fadeFactor = (float)n / (sinusoidal.fs * 0.01); // フェードアウト
+    hoge = (int16_t)(hoge * fadeFactor); // 符号付き16ビット整数で計算
+
+    // クリッピング処理
+    hoge = std::max(std::min(hoge, (int16_t)32767), (int16_t)-32768);
+
+    *(data + i) = (uint8_t)(hoge & 0xFF); // 低バイト
+    *(data + i + 1) = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+    i += 2;
+
+  }
+
+  //Serial.println(i);
+  
+  /*
+  i = 0;
+  float fadeFactor;
+  for (int n = 0; n < sinusoidal.fs * 0.01; n++){ //音源の前後10[ms]をフェード処理(クリックノイズ対策)
+    hoge = *(data + length - i - 2) + (*(data + length - i - 1) << 8);
+    fadeFactor = (float)n / (sinusoidal.fs * 0.01); // フェードアウト
+    hoge = (int16_t)(hoge * fadeFactor); // 符号付き16ビット整数で計算
+
+    // クリッピング処理
+    hoge = std::max(std::min(hoge, (int16_t)32767), (int16_t)-32768);
+
+    *(data + length - i - 2) = (uint8_t)(hoge & 0xFF); // 低バイト
+    *(data + length - i - 1) = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+    i += 2;
+
+  }
+  */
+
+  //Serial.println(i);
+  //Serial.println("finish");
+
+  return 0;
+
+}
+
+
+/* ボリューム変更関数(ホワイトノイズ) 
+mode変数が1ならボリュームアップ, 0ならボリュームダウン
+*/
+int SetVolume(int mode, int volume){
+
+  int16_t hoge;
+  int i = 0;
+  uint8_t writeData[2]; 
+  size_t BytesWritten;
+  
+  //Serial.println(mode); // デバッグ
+
+  if(mode){ // trueならボリューム上げる
+
+    while(1){
+
+      for(int n = 0; n < 132300 - 1; n++){ //ホワイトノイズのボリューム計算
+
+        //Serial.println(pgm_read_byte(WavData + n + 44), HEX); //デバッグ
+        //Serial.println(pgm_read_byte(WavData + n + 1 + 44), HEX); //デバッグ
+
+        hoge = pgm_read_byte(WavData + n + 44) + ((pgm_read_byte(WavData + 44 + n + 1)) << 8);
+        hoge *= (volume * 0.1); // ボリュームを上げる
+
+        writeData[0] = (uint8_t)(hoge & 0xFF); // 低バイト
+        writeData[1] = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+        //Serial.println(writeData[0]); // デバッグ
+        //Serial.println(writeData[1]); // デバッグ
+
+        i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+        if(uxQueueMessagesWaiting(xQueue_1)){
+          //Serial.println("volumeDownStart"); // デバッグ
+          i2s_zero_dma_buffer(i2s_num); // DMAバッファを0クリア
+          return 0;
+        }
+
+      }
+      i = 0;
+    
+    }    
+
+    //Serial.println("volumeUp"); // デバッグ
+
+  }else{ // falseならボリューム下げる.
+
+    //Serial.println("volumeDownStart"); // デバッグ
+    //Serial.println(volume);
+
+    while(1){
+      
+      for(int n = 0; n < 132300 - 1; n++){ // ホワイトノイズのボリューム計算
+
+        //Serial.println(pgm_read_byte(WavData + n + 44), HEX); // デバッグ
+        //Serial.println(pgm_read_byte(WavData + n + 1 + 44), HEX); // デバッグ
+
+        hoge = pgm_read_byte(WavData + i + 44) + ((pgm_read_byte(WavData + 44 + i + 1)) << 8);
+        hoge /= (volume * 0.1); // ボリュームダウン
+
+        writeData[0] = (uint8_t)(hoge & 0xFF); // 低バイト
+        writeData[1] = (uint8_t)((hoge >> 8) & 0xFF); // 高バイト
+
+        //Serial.println(writeData[0]); // デバッグ
+        //Serial.println(writeData[1]); // デバッグ
+
+        i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+        i += 2;
+
+        if(uxQueueMessagesWaiting(xQueue_1)){
+          //Serial.println("volumeDownStart"); // デバッグ
+          i2s_zero_dma_buffer(i2s_num); // DMAバッファを0クリア
+          return 0;
+        }
+
+      }
+      i = 0;
+      //break;
+    }
+
+    //Serial.println("volumeDown"); // デバッグ
+
+  }
+
+  return 0;
+
+}
+
+
+/* 特定周波数帯域を通過させるデジタルフィルタ(バンドパス)
+正しく設計できているか自信がない. 修正が必要かも
+flashにあるホワイトノイズにバンドパスをかける.
+帯域幅100hzで約50[db]になる.
+*/
+int BandPassIirFilter(double fc, double fb, int mode, int volume){
+
+  double fs = 44100;
+  //double fc = 6000; //カットオフ周波数(中心周波数)
+  //double fb = 500; //帯域幅
+  double a[3] = {0, 0, 0};
+  double b[3] = {0, 0, 0};
+  double in[2] = {0, 0};
+  double out[2] = {0, 0};
+
+  int16_t inputy;
+  int16_t outputy;
+  uint8_t writeData[2]; 
+  size_t BytesWritten;
+
+  double omega_b  = 2*3.14*(fb/fs); //角周波数
+  double omega_c  = 2*3.14*(fc/fs);
+  omega_c = 2*tan(0.5*omega_c);
+  double omega_c1 = omega_c-0.5*omega_b;
+  double omega_c2 = omega_c+0.5*omega_b;
+  double omega_o  = sqrt(omega_c1*omega_c2); 
+
+  /*フィルタ係数*/
+  b[0] = 2*omega_b;
+  b[1] = 0;
+  b[2] = -2*omega_b;
+  a[0] = pow(omega_o, 2.0)+2*omega_b+4;
+  a[1] = pow(2*omega_o, 2.0)-8;
+  a[2] = pow(omega_o, 2.0)-2*omega_b+4;
+
+  //Serial.println(b[0]);
+
+  /*周波数特性プロット, octaveで使用する. このプログラムでは, 使用できない.
+  [h, f] = freqz(b, a, 1024, fs);
+  figure;
+  plot(f, abs(h));
+  title('Frequency Response of the Band-Pass Filter');
+  xlabel('Frequency (Hz)');
+  ylabel('Magnitude');
+  */
+
+  //Serial.println(volume);
+  //Serial.println(mode);
+  
+  switch(mode){
+    
+    case 0: //約50[db]
+      //フィルタリング処理 (タップが2なので, もっと急峻にしたい場合, タップを増やす) 
+      while(1){
+        for(int i = 0; i < 88200; i+=2){
+          inputy = pgm_read_byte(WavData + i + 44) + ((pgm_read_byte(WavData + 44 + i + 1)) << 8);
+          outputy = (b[0] / a[0]) * inputy + (b[1] / a[0]) * in[0] + (b[2] / a[0]) * in[1] - (a[1] / a[0]) * out[0] - (a[2] / a[0]) * out[1];
+          in[1] = in[0];
+          in[0] = inputy;
+          out[1] = out[0];
+          out[0] = outputy;
+          writeData[0] = (uint8_t)(outputy & 0xFF); // 低バイト
+          writeData[1] = (uint8_t)((outputy >> 8) & 0xFF); // 高バイト
+          i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+          if(uxQueueMessagesWaiting(xQueue_1)){
+            //Serial.println("volumeDownStart"); // デバッグ
+            i2s_zero_dma_buffer(i2s_num);
+            return 0;
+          }
+
+        }       
+      }
+
+      i2s_zero_dma_buffer(i2s_num);
+      break;
+
+    case 1: //音量下げる
+      while(1){
+        for(int i = 0; i < 88200; i+=2){
+          inputy = pgm_read_byte(WavData + i + 44) + ((pgm_read_byte(WavData + 44 + i + 1)) << 8);
+          outputy = (b[0] / a[0]) * inputy + (b[1] / a[0]) * in[0] + (b[2] / a[0]) * in[1] - (a[1] / a[0]) * out[0] - (a[2] / a[0]) * out[1];
+          in[1] = in[0];
+          in[0] = inputy;
+          out[1] = out[0];
+          out[0] = outputy;
+          outputy /= (volume * 0.1); // ボリュームダウン
+          writeData[0] = (uint8_t)(outputy & 0xFF); // 低バイト
+          writeData[1] = (uint8_t)((outputy >> 8) & 0xFF); // 高バイト
+          i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+
+          if(uxQueueMessagesWaiting(xQueue_1)){
+            //Serial.println("volumeDownStart"); // デバッグ
+            i2s_zero_dma_buffer(i2s_num);
+            return 0;
+          }
+
+        }
+
+      }
+
+      i2s_zero_dma_buffer(i2s_num);
+      break;
+
+    case 2: //音量上げる
+
+      //Serial.println("Volumeup"); // デバッグ
+
+      while(1){
+        for(int i = 0; i < 88200; i+=2){
+          inputy = pgm_read_byte(WavData + i + 44) + ((pgm_read_byte(WavData + 44 + i + 1)) << 8);
+          outputy = (b[0] / a[0]) * inputy + (b[1] / a[0]) * in[0] + (b[2] / a[0]) * in[1] - (a[1] / a[0]) * out[0] - (a[2] / a[0]) * out[1];
+          in[1] = in[0];
+          in[0] = inputy;
+          out[1] = out[0];
+          out[0] = outputy;
+          outputy *= (volume * 0.1); // ボリュームダウン
+          writeData[0] = (uint8_t)(outputy & 0xFF); // 低バイト
+          writeData[1] = (uint8_t)((outputy >> 8) & 0xFF); // 高バイト
+          i2s_write(i2s_num, writeData, 2, &BytesWritten, portMAX_DELAY);
+          if(uxQueueMessagesWaiting(xQueue_1)){
+            //Serial.println("volumeupStart"); // デバッグ
+            i2s_zero_dma_buffer(i2s_num);
+            return 0;
+          }
+        }
+      }
+      
+      i2s_zero_dma_buffer(i2s_num);
+      break;  
+
+    default:
+      break; 
+  
+  }
+
+  return 0;
+  
+}
+
+
+void setup() {
+
+  Serial.begin(115200);
+  //disableCore0WDT();
+  //pinMode(14, OUTPUT);
+  //Serial.println("Receiver");
+  //while (!Serial);
+
+
+  /*CANのconfig, ESP32ではなぜかTWAIと呼ぶ(おそらくボッシュにお金を払いたくないため)*/
+  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(GPIO_NUM_21, GPIO_NUM_22, TWAI_MODE_NORMAL);
+  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+  //Install TWAI driver
+  if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
+    printf("Driver installed\n");
+  } else {
+    printf("Failed to install driver\n");
+    return;
+  }
+  //Start TWAI driver
+  if (twai_start() == ESP_OK) {
+      printf("Driver started\n");
+  } else {
+      printf("Failed to start driver\n");
+      return;
+  }
+
+
+  memcpy(&WavHeader, &WavData, 44);
+  DumpWAVHeader(&WavHeader);
+  if(ValidWavData(&WavHeader)){
+    i2s_driver_install(i2s_num, &i2s_config, 0, NULL);//i2sのポート,config構造体,サイズ,ハンドル
+    i2s_set_pin(i2s_num, &pin_config);
+    //i2s_set_sample_rates(i2s_num, WavHeader.SampleRate);
+    i2s_set_sample_rates(i2s_num, 22050);
+    TheData=WavData;
+    TheData+=44;
+  }else{
+    while(true);
+  }
+
+
+  /*
+   *MAX98357aのシャットダウンピンとのIOピン
+   */
+  pinMode(16, OUTPUT);
+  digitalWrite(16, HIGH);
+
+
+  /*
+   *ledとのIOピン
+   *現在は使用していない.
+   */
+  //pinMode(2,OUTPUT);
+
+  for(i = 0; i < 100000 ; ++i){
+    storeSinusoidal[i] = 0;
+  }
+  i = 0;
+
+  for(i = 0; i < 2000; ++i){
+    clickvs[i] = 0;
+  }
+  i = 0;
+
+  /*生成するsin波の初期値*/
+  sinusoidal.fs = 44100;
+  sinusoidal.bits = 16;
+  sinusoidal.length = 88200;
+  sinusoidal.a = 0.2;
+  sinusoidal.f = 5000;
+
+  whiteNoise = (unsigned char *)malloc(sizeof(unsigned char) * 100000);
+  
+  //dac_output_enable(DAC_CHANNEL_1); // use DAC_CHANNEL_1 (pin 25 fixed)
+  xTaskCreatePinnedToCore(task1, "task1", 8192, NULL, 1, &taskHandle[0], 0);
+  xQueue_1 = xQueueCreate(1, 1);
+  i2s_zero_dma_buffer(i2s_num);
+  //i2s_stop(i2s_num);
+  delay(1000);
+  //digitalWrite(16, LOW);
+  Serial.println("ready");
+  //printf("RXキューのデフォルトサイズ: %d\n", g_config.rx_queue_len);
+
+}
+
+
+void loop() {
+
+  twai_message_t message;
+
+  if (twai_receive(&message, pdMS_TO_TICKS(10000)) == ESP_OK) {
+      //Serial.println(message.identifier);
+      if(IsMyAddress(message.identifier)){
+
+        temp = IsMyCommand(message.identifier);
+
+        switch(temp){
+
+          case 1: //再生, ok
+            //Serial.println(length);
+            xQueueSend(xQueue_1, &music, 0); //コア間通信
+            break;
+
+          case 2: //再生停止, ok, 修正必要
+
+            i2s_stop(i2s_num);
+            xQueueSend(xQueue_1, &stop, 0);
+            //i2s_zero_dma_buffer(i2s_num);
+            break;
+
+          case 3: //音源格納, ok
+            //Serial.println(message.data_length_code);
+            for(int n = 0; n < message.data_length_code; n++){
+              *(whiteNoise + i) = message.data[n];
+              ++i; //グローバルアドレス
+              //Serial.print("i;"); //デバッグ
+              //Serial.println(i); //デバッグ
+              /*デバッグ*/
+              
+              if(i==40000){
+                //endtime = millis(); //時間測定
+                //Serial.println(endtime - starttime); //時間測定
+                Serial.println(whiteNoise[1], HEX);
+                Serial.println(whiteNoise[2], HEX);
+                Serial.println(whiteNoise[3], HEX);
+                Serial.println(whiteNoise[4], HEX);
+                Serial.println(whiteNoise[5], HEX);
+                Serial.println("finish");
+              }
+              
+            }
+            break;
+
+          case 4: //音源データストップ, ok
+
+            length = i;
+            //Serial.println(length);
+            i = 0;
+            break;
+
+          case 5: //sin波生成, ok
+            Serial.println(message.data_length_code);
+            for(int n = 0; n < message.data_length_code; n++){
+                readSinusoidal[i] = message.data[n];
+                ++i;
+            }
+            sinusoidal.length = (readSinusoidal[0] << 8) + readSinusoidal[1];
+            sinusoidal.f = (readSinusoidal[2] << 8) + readSinusoidal[3];
+            sinusoidal.a = (readSinusoidal[4] << 8) + readSinusoidal[5];
+            Serial.println(sinusoidal.length);
+            Serial.println(sinusoidal.f);
+            Serial.println(sinusoidal.a);
+            CreateSinusoidal(storeSinusoidal, sinusoidal.length, sinusoidal.f, sinusoidal.a);
+            i = 0;
+            break;
+
+          case 6: //sin波再生, ok, ここ
+            
+            for(int n = 0; n < message.data_length_code; n++){
+                readVolume[i] = message.data[n];
+                ++i;
+            }
+            //Serial.println(readVolume[0]);
+            xQueueSend(xQueue_1, &playSinusoidal, 0);
+            Serial.println("test");
+            /*
+            for(i = 0; i < 8; ++i){
+              //readVolume[i] = 0;
+              Serial.println(readVolume[i]);
+            }
+            */
+            i = 0;
+            break;
+
+          case 7: //ホワイトノイズ再生, 現在は使用していない.
+
+            //Serial.println("playwhite");
+            //xQueueSend(xQueue_1, &white, 0);
+            break;
+
+          case 8: //ホワイトノイズ音量変更. ok
+
+            for(int n = 0; n < message.data_length_code; n++){
+                readVolume[i] = message.data[n];
+                ++i;
+            }
+            //Serial.println(readVolume[0]);
+            xQueueSend(xQueue_1, &whiteNoiseChangeVolume, 0);
+            //Serial.println("test");
+            //for(i = 0; i < 8; ++i){
+              //readVolume[i] = 0;
+              //Serial.println(readVolume[i]);
+            //}
+            i = 0;
+            break;
+
+          case 9: //バッファクリア
+
+            i2s_stop(i2s_num);
+            i2s_zero_dma_buffer(i2s_num);
+            i2s_start(i2s_num);
+            break;
+
+          case 10: //音源格納メモリリセット
+
+            free(whiteNoise);
+            whiteNoise = (unsigned char *)malloc(sizeof(unsigned char) * 100000);
+            i = 0;
+            break;
+
+          case 11: //アンプシャットダウン
+
+            digitalWrite(16, LOW);
+            xQueueSend(xQueue_1, &stop, 0);
+            i2s_zero_dma_buffer(i2s_num);
+            break;
+
+          case 12: //アンプスタートアップ
+
+            digitalWrite(16, HIGH);
+            break;
+          
+          case 13: //i2s再開
+
+            //Serial.println("is2_start");
+            i2s_zero_dma_buffer(i2s_num);
+            i2s_start(i2s_num);
+            break;
+
+          case 14: //バンドパスフィルタ適用, ok
+
+            for(int n = 0; n < message.data_length_code; n++){
+                readVolume[i] = message.data[n];
+                ++i;
+            }
+            fc= (readVolume[0] << 8) + readVolume[1];
+            fb = (readVolume[2] << 8) + readVolume[3];
+            //Serial.println(fc);
+            //Serial.println(fb);
+            xQueueSend(xQueue_1, &bandpass, 0);
+            //Serial.println("bandpass");
+            //for(i = 0; i < 8; ++i){
+              //readVolume[i] = 0;
+              //Serial.println(readVolume[i]);
+            //}
+            i = 0;            
+            break;
+
+          /*
+          case 15: //音量変更
+            while(CAN.available()){
+              readVolume[i] = CAN.read();
+              ++i;
+              if(i == 8){
+                Serial.println(readVolume[0]);
+                changeVolume(0, readVolume[0]);
+                Serial.println("test");
+                for(i = 0; i < 8; ++i){
+                  readVolume[i] = 0;
+                  //Serial.println(readVolume[i]);
+                }
+                i = 0;
+              }
+            }
+            break;
+          */
+
+          case 16: //フェードアウトに使用する, ok
+
+            //Serial.println("start");
+            for(int n = 0; n < message.data_length_code; n++){
+                readVolume[i] = message.data[n];
+                ++i;
+            }
+            //Serial.println(readVolume[0]);
+            xQueueSend(xQueue_1, &start, 0);
+            //Serial.println("test");
+            //for(i = 0; i < 8; ++i){
+            //  readVolume[i] = 0;
+              //Serial.println(readVolume[i]);
+            //}
+            i = 0;         
+            break;
+
+          case 17:
+
+            //Serial.println("stop"); //フェードアウトに使用する, ok
+            xQueueSend(xQueue_1, &stop, 0);
+            break;
+          
+          case 18:
+
+            //Serial.println("stop"); //フェードアウトに使用する, ok
+            xQueueSend(xQueue_1, &sinmusic, 0);
+            break;
+
+          case 19:
+            //同時制御
+            break;
+
+          default:
+            break;
+
+        }
+
+      }
+      
+  } else {
+      //printf("Failed to receive message\n");
+      return;
+  }
+
+}
