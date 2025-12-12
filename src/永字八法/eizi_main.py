@@ -11,11 +11,11 @@ EIJI_PRINCIPLES = {
     1: {"name": "側 (ソク - 点)",         "cmd_file": "1_soku.txt",  "voice_file": "soku.wav"},
     2: {"name": "勒 (ロク - 横画)",       "cmd_file": "2_roku.txt",  "voice_file": "roku.wav"},
     3: {"name": "努 (ド - 縦画)",         "cmd_file": "3_do.txt",    "voice_file": "do.wav"},
-    4: {"name": "趯 (テキ - はね)",       "cmd_file": "4_teki.txt",  "voice_file": "eki.wav"},
+    4: {"name": "趯 (テキ - はね)",       "cmd_file": "4_teki.txt",  "voice_file": "teki.wav"},
     5: {"name": "策 (サク - 右上がり)",   "cmd_file": "5_saku.txt",  "voice_file": "saku.wav"},
     6: {"name": "掠 (リャク - 左はらい)", "cmd_file": "6_ryaku.txt", "voice_file": "ryaku.wav"},
-    7: {"name": "啄 (タク - 短い左はらい)","cmd_file": "7_taku1.txt", "voice_file": "aku1.wav"},
-    8: {"name": "磔 (タク - 右はらい)",   "cmd_file": "8_taku2.txt", "voice_file": "aku2.wav"},
+    7: {"name": "啄 (タク - 短い左はらい)","cmd_file": "7_taku1.txt", "voice_file": "taku1.wav"},
+    8: {"name": "磔 (タク - 右はらい)",   "cmd_file": "8_taku2.txt", "voice_file": "taku2.wav"},
     9: {"name": "テスト (cho.txt)",       "cmd_file": "cho.txt",     "voice_file": "voice_test.mp3"},
 }
 
