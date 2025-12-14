@@ -15,10 +15,9 @@ _RECORD_LOCK = threading.Lock()
 STROKE_COUNT = 0          # A0 を受けるたびにインクリメント
 
 # ★ A0動作時の各ディレイ時間設定 (秒単位)
-# 再生時・実行時共通で使用されます
-DELAY_A0_PRE_MOVE   = 1.0  # ① 移動開始前の待機
+DELAY_A0_PRE_MOVE   = 3.0  # ① 移動開始前の待機 (直前の動きが止まってから、この時間待つ)
 DELAY_A0_PRE_SOUND  = 1.0  # ② 移動完了後、音声再生前の待機
-DELAY_A0_POST_SOUND = 1.0  # ③ 音声再生後の待機
+DELAY_A0_POST_SOUND = 0.5  # ③ 音声再生完了後の待機
 
 # --- ユーティリティ ----------------------------------------------------------------
 def _safe_serial_write(ser, text):
@@ -37,31 +36,58 @@ def _safe_serial_write(ser, text):
     except Exception as e:
         print(f"_safe_serial_write error: {e}")
 
-def _play_sound_file(path):
-    """mac/windows/linux で非同期に再生を試みる。外部コマンドに依存。"""
+def _play_sound_file(path, wait=False):
+    """
+    音声ファイルを再生する。
+    wait=True の場合、再生が終わるまで処理をブロックする。
+    """
     if not os.path.exists(path):
         print(f"音声ファイルが見つかりません: {path}")
+        if wait:
+            time.sleep(1.0)
         return
+
     try:
+        # --- Mac (afplay) ---
         if sys.platform == 'darwin':
-            subprocess.Popen(['afplay', path])
+            if wait:
+                subprocess.run(['afplay', path])
+            else:
+                subprocess.Popen(['afplay', path])
+
+        # --- Windows (PowerShell SoundPlayer) ---
         elif sys.platform.startswith('win'):
-            subprocess.Popen(['powershell', '-c', f"(New-Object Media.SoundPlayer '{path}').Play()"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            method = "PlaySync()" if wait else "Play()"
+            cmd = f"(New-Object Media.SoundPlayer '{path}').{method}"
+            subprocess.run(['powershell', '-c', cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # --- Linux (paplay/aplay/ffplay) ---
         else:
+            player = None
             if shutil.which('paplay'):
-                subprocess.Popen(['paplay', path])
+                player = 'paplay'
             elif shutil.which('aplay'):
-                subprocess.Popen(['aplay', path])
+                player = 'aplay'
             elif shutil.which('ffplay'):
-                subprocess.Popen(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', path])
+                player = 'ffplay'
+            
+            if player:
+                args = [player, path]
+                if player == 'ffplay':
+                    args = ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', path]
+                
+                if wait:
+                    subprocess.run(args)
+                else:
+                    subprocess.Popen(args)
             else:
                 print("音声再生コマンドが見つかりません (afplay/aplay/paplay).")
+
     except Exception as e:
         print(f"音声再生エラー: {e}")
 
 # --- シリアル / UI ヘルパー ----------------------------------------------------------
 def select_run_mode():
-    """実行モードを選択する"""
     print("実行モードを選択してください:")
     print("  1: 両方 (Speaker & Plotter)")
     print("  2: スピーカのみ (Speaker Only)")
@@ -79,7 +105,6 @@ def select_run_mode():
             print("1, 2, 3 のいずれかを入力してください。")
 
 def select_port(device_name="デバイス"):
-    """利用可能なシリアルポートを列挙して選択・オープンして返す。失敗時は None。"""
     ser = serial.Serial()
     ser.baudrate = 115200
     ser.timeout = 0.1
@@ -208,10 +233,11 @@ class Speaker:
         except Exception as e:
             print(f"Speaker send error: {e}")
 
-    def play_a0_sound(self, idx):
-        """STROKE_COUNT に対応するファイルを非同期再生する。"""
+    def play_a0_sound(self, idx, wait=False):
+        """
+        wait=True なら再生完了を待つ。
+        """
         if self.ser is None:
-            # プロッタ単体モードなどでSpeakerポートがない場合は再生しない
             return
 
         try:
@@ -230,8 +256,10 @@ class Speaker:
             if not found:
                 print(f"音声ファイルが見つかりません: {fname} (検索先: {search_dirs})")
                 return
-            _play_sound_file(found)
-            print(f"[Speaker] 音声再生: {found}")
+            
+            _play_sound_file(found, wait=wait)
+            print(f"[Speaker] 音声再生完了: {found}")
+            
         except Exception as e:
             print(f"play_a0_sound エラー: {e}")
 
@@ -361,6 +389,8 @@ def play_recorded_file(filename, pl, sp):
                         ms = 0
                     delay = (ms / 1000.0) + 0.05
                     print(f"[{lineno}] ホスト側スリープ: {delay}s")
+                    # D1も「動きを止めてから待つ」ためにsyncを入れるとより正確
+                    if pl: pl.sync() 
                     time.sleep(delay)
                     if len(tokens) > 2:
                         speaker_cmd = ' '.join(tokens[2:])
@@ -382,26 +412,23 @@ def play_recorded_file(filename, pl, sp):
                         plotter_line = ' '.join(tokens)
                         speaker_cmd = None
                     
-                    # A0が含まれているかチェック
                     parts = speaker_cmd.split() if speaker_cmd else []
                     is_a0 = (parts and parts[0].upper() == 'A0')
                     
-                    # ★修正: A0の場合、移動前のDelay
+                    # ★ A0の場合: 前の動作が完全に終わるのを待ってからディレイ
                     if is_a0:
-                        time.sleep(DELAY_A0_PRE_MOVE)
+                        if pl: pl.sync()           # 直前の動作を完了させる
+                        time.sleep(DELAY_A0_PRE_MOVE) # 設定された秒数待機
 
-                    # プロッタへの送信
                     if pl:
                         try:
                             pl.send_stream(plotter_line)
-                            # ★修正: A0の場合、移動完了を待機
                             if is_a0:
                                 pl.sync()
                         except Exception as e:
                             print(f"[{lineno}] プロッタ送信エラー: {e}")
                     
                     if speaker_cmd:
-                        # ★修正: A0の場合、音声前のDelay
                         if is_a0:
                             time.sleep(DELAY_A0_PRE_SOUND)
 
@@ -409,7 +436,7 @@ def play_recorded_file(filename, pl, sp):
                             global STROKE_COUNT
                             STROKE_COUNT += 1
                             try:
-                                sp.play_a0_sound(STROKE_COUNT)
+                                sp.play_a0_sound(STROKE_COUNT, wait=True)
                             except Exception as e:
                                 print(f"[{lineno}] A0 再生エラー: {e}")
                             
@@ -417,11 +444,9 @@ def play_recorded_file(filename, pl, sp):
                             if sp.ser:
                                 print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
                             
-                            # ★修正: A0の場合、音声後のDelay
                             time.sleep(DELAY_A0_POST_SOUND)
 
                         else:
-                            # A0以外は通常通り即送信
                             sp.write(speaker_cmd)
                             if sp.ser:
                                 print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
@@ -519,22 +544,27 @@ def main():
                             _save_record([line], plot_line)
                             
                             if not (RECORD_FILE and not RECORD_EXECUTE):
+                                # ★ A0専用ロジック (Lookahead的アプローチ)
+                                
+                                # 0. 直前の動作を終わらせる (重要: これがないと動きながらカウントしてしまう)
+                                pl.sync()
+
                                 # 1. 移動前のディレイ
                                 time.sleep(DELAY_A0_PRE_MOVE)
 
-                                # 2. プロッタ動作 (筆を上げて開始位置へ)
+                                # 2. プロッタ動作
                                 pl.up()
                                 pl.write(data[0], data[1], data[2], 1)
-                                pl.sync() # 移動が完全に終わるのを待つ
+                                pl.sync() 
 
                                 # 3. 音声再生前のディレイ
                                 time.sleep(DELAY_A0_PRE_SOUND)
 
-                                # 4. 音声再生処理
+                                # 4. 音声再生 (wait=True)
                                 STROKE_COUNT += 1
                                 print(f"画数: {STROKE_COUNT}")
                                 try:
-                                    sp.play_a0_sound(STROKE_COUNT)
+                                    sp.play_a0_sound(STROKE_COUNT, wait=True)
                                 except Exception as e:
                                     print(f"A0 音声再生エラー: {e}")
                                 
@@ -556,6 +586,8 @@ def main():
                                     ms = 0
                                 delay = (ms / 1000.0) + 0.05
                                 print(f"delay処理:{ms}ms -> sleep {delay}s")
+                                # D1も念のため同期してから待つ
+                                pl.sync()
                                 time.sleep(delay)
                             else:
                                 print("保存のみモード: D1 実行をスキップ")
