@@ -1,60 +1,59 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk # ttkをインポート
 import csv
 import math
 import re
 import copy
 
 # --- 1. 永字八法コマンド変換レシピ (V_adj=2, Ratio >= 100) ---
-# F/W値は100以上に設定し、計算結果も100未満にならないよう保証する
 EIGHT_STROKES = {
     "側 (点)": {
-        "Type": "A2", "V_adj": 2, "Ratio": 150, # 150倍
+        "Type": "A2", "V_adj": 2, "Ratio": 150, 
         "Start": {"V_diff": 15.0, "F": 2000, "W": 200},
         "End":   {"V_diff": 15.0, "F": 2000, "W": 200},
         "Special": {}
     },
     "勒 (横画)": {
-        "Type": "A2", "V_adj": 2, "Ratio": 100, # 100倍
+        "Type": "A2", "V_adj": 2, "Ratio": 100,
         "Start": {"V_diff": -5.0, "F": 500, "W": 300},
         "End":   {"V_diff": -5.0, "F": 500, "W": 300},
         "Special": {"END_A3": True}
     },
     "努 (縦画)": {
-        "Type": "A2", "V_adj": 2, "Ratio": 120, # 120倍
+        "Type": "A2", "V_adj": 2, "Ratio": 120,
         "Start": {"V_diff": 10.0, "F": 300, "W": 500},
         "End":   {"V_diff": 10.0, "F": 300, "W": 500},
         "Special": {"END_A3": True}
     },
     "趯 (跳ね)": {
         "Type": "A2", "V_adj": 2, 
-        "Ratio_Start": 150, "Ratio_End": 300, # 150倍 -> 300倍 (補間)
+        "Ratio_Start": 150, "Ratio_End": 300, 
         "Start": {"V_diff": 10.0, "F": 2000, "W": 1000},
         "End":   {"V_diff": 20.0, "F": 4000, "W": 1500},
         "Special": {"END_A3": True}
     },
     "策 (短横画)": {
-        "Type": "A2", "V_adj": 2, "Ratio": 100, # 100倍
+        "Type": "A2", "V_adj": 2, "Ratio": 100, 
         "Start": {"V_diff": -10.0, "F": 1500, "W": 500},
         "End":   {"V_diff": -10.0, "F": 1500, "W": 500},
         "Special": {}
     },
     "掠 (左はらい)": {
         "Type": "A2", "V_adj": 2, 
-        "Ratio_Start": 300, "Ratio_End": 100, # 300倍 -> 100倍 (補間)
+        "Ratio_Start": 300, "Ratio_End": 100, 
         "Start": {"V_diff": 10.0, "F": 700, "W": 1200},
         "End":   {"V_diff": -15.0, "F": 1500, "W": 1200},
         "Special": {"END_A3": True}
     },
     "啄 (短いはらい)": {
-        "Type": "A2", "V_adj": 2, "Ratio": 180, # 180倍
+        "Type": "A2", "V_adj": 2, "Ratio": 180, 
         "Start": {"V_diff": 15.0, "F": 2500, "W": 400},
         "End":   {"V_diff": 15.0, "F": 2500, "W": 400},
         "Special": {}
     },
     "磔 (右はらい)": {
         "Type": "A2", "V_adj": 2, 
-        "Ratio_Start": 100, "Ratio_End": 250, # 100倍 -> 250倍 (補間)
+        "Ratio_Start": 100, "Ratio_End": 250, 
         "Start": {"V_diff": -10.0, "F": 600, "W": 300},
         "End":   {"V_diff": 20.0, "F": 1500, "W": 1000},
         "Special": {"SPLIT_D1": True, "END_A3": True}
@@ -62,15 +61,15 @@ EIGHT_STROKES = {
 }
 
 # その他の定数
-DEFAULT_VAL3 = 14 # data[3] スレーブモードデータ (14 or 17)
-DEFAULT_VAL4 = 0 # data[5] アドレスH部 (使用しない)
-DEFAULT_SPEAKER_PARAMS = f"0 0 0 0 0 0" # 初期ダミーのdata[6]〜data[11]
+DEFAULT_VAL3 = 14 
+DEFAULT_VAL4 = 0 
+DEFAULT_SPEAKER_PARAMS = f"0 0 0 0 0 0" 
 MIN_FREQ_W = 100 # FとWの最小値を100に保証する
 
 class PlotterCsvEnhancer(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("プロッタ用 永字八法エンハンサー (最終確定版)")
+        self.title("プロッタ用 永字八法エンハンサー (最終確定版/ttk)")
         self.geometry("1200x800")
 
         self.CANVAS_WIDTH = 600
@@ -88,57 +87,69 @@ class PlotterCsvEnhancer(tk.Tk):
         self.create_widgets()
 
     def create_widgets(self):
-        left_frame = tk.Frame(self, padx=10, pady=10, width=450)
+        # ttk.Frameを使用
+        left_frame = ttk.Frame(self, padding="10", width=450)
         left_frame.pack(side="left", fill="y")
         
-        right_frame = tk.Frame(self, padx=10, pady=10)
+        right_frame = ttk.Frame(self, padding="10")
         right_frame.pack(side="right", fill="both", expand=True)
 
-        # 1. ファイル操作
-        file_frame = tk.LabelFrame(left_frame, text="1. ファイル操作", padx=5, pady=5)
+        # 1. ファイル操作 (ttk.LabelFrameを使用)
+        file_frame = ttk.LabelFrame(left_frame, text="1. ファイル操作", padding="5")
         file_frame.pack(fill="x", pady=5)
         
-        btn_frame = tk.Frame(file_frame)
+        btn_frame = ttk.Frame(file_frame)
         btn_frame.pack(fill="x")
-        tk.Button(btn_frame, text="CSVを開く", command=self.load_csv, bg="#ddd").pack(side="left", padx=5)
-        tk.Button(btn_frame, text="CSV保存", command=self.save_csv, bg="#ddd").pack(side="left", padx=5)
+        # ttk.Buttonを使用
+        ttk.Button(btn_frame, text="CSVを開く", command=self.load_csv).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="CSV保存", command=self.save_csv).pack(side="left", padx=5)
         
-        tk.Button(file_frame, text="TXT保存 (プロッタ用)", command=self.save_txt_for_plotter, bg="#FF9800", fg="white").pack(fill="x", padx=5, pady=5)
+        ttk.Button(file_frame, text="TXT保存 (プロッタ用)", command=self.save_txt_for_plotter, style="Accent.TButton").pack(fill="x", padx=5, pady=5)
         
-        self.lbl_status = tk.Label(file_frame, text="未読み込み")
+        # ttk.Labelを使用
+        self.lbl_status = ttk.Label(file_frame, text="未読み込み")
         self.lbl_status.pack(anchor="w", padx=5)
 
-        # 2. データリスト
-        list_frame = tk.LabelFrame(left_frame, text="2. データ選択 (ストローク単位)", padx=5, pady=5)
+        # 2. データリスト (ttk.LabelFrameを使用)
+        list_frame = ttk.LabelFrame(left_frame, text="2. データ選択 (ストローク単位)", padding="5")
         list_frame.pack(fill="both", expand=True, pady=5)
         
-        scrollbar = tk.Scrollbar(list_frame)
+        # ttk.Scrollbarを使用
+        scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side="right", fill="y")
-        self.listbox = tk.Listbox(list_frame, selectmode="extended", yscrollcommand=scrollbar.set, font=("Consolas", 10))
+        # Listboxはtk.Listboxを維持
+        self.listbox = tk.Listbox(list_frame, selectmode="extended", yscrollcommand=scrollbar.set, font=("Consolas", 10), height=15)
         self.listbox.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.listbox.yview)
         
         self.listbox.bind('<<ListboxSelect>>', self.on_select_list)
 
-        # 3. 技法適用
-        convert_frame = tk.LabelFrame(left_frame, text="3. 永字八法 適用", padx=5, pady=5)
+        # 3. 技法適用 (ttk.LabelFrameを使用)
+        convert_frame = ttk.LabelFrame(left_frame, text="3. 永字八法 適用", padding="5")
         convert_frame.pack(fill="x", pady=5)
 
-        tk.Label(convert_frame, text="技法:").pack(side="left")
+        ttk.Label(convert_frame, text="技法:").pack(side="left")
         self.stroke_var = tk.StringVar(self)
+        
+        # ttk.Comboboxを使用 (OptionMenuの代替、ルックアンドフィールが良い)
         self.stroke_var.set(list(EIGHT_STROKES.keys())[0])
-        stroke_menu = tk.OptionMenu(convert_frame, self.stroke_var, *EIGHT_STROKES.keys())
-        stroke_menu.pack(side="left", padx=5)
+        self.stroke_combobox = ttk.Combobox(convert_frame, textvariable=self.stroke_var, values=list(EIGHT_STROKES.keys()), state="readonly", width=15)
+        self.stroke_combobox.pack(side="left", padx=5)
 
-        tk.Button(convert_frame, text="適用", command=self.apply_enhancement, bg="#4CAF50", fg="white").pack(side="left", padx=10)
+        ttk.Button(convert_frame, text="適用", command=self.apply_enhancement, style="Accent.TButton").pack(side="left", padx=10)
 
         # 4. キャンバス
-        self.canvas = tk.Canvas(right_frame, bg="white", width=self.CANVAS_WIDTH, height=self.CANVAS_HEIGHT)
+        self.canvas = tk.Canvas(right_frame, bg="white", width=self.CANVAS_WIDTH, height=self.CANVAS_HEIGHT, highlightthickness=1, highlightbackground="#ccc")
         self.canvas.pack(fill="both", expand=True)
         
-        legend_frame = tk.Frame(right_frame)
+        legend_frame = ttk.Frame(right_frame)
         legend_frame.pack(fill="x")
-        tk.Label(legend_frame, text="凡例: 線色=周波数(青(低F)→赤(高F)), 線幅=Z値(ペン圧), 座標:右上が原点(0,0)").pack()
+        ttk.Label(legend_frame, text="凡例: 線色=周波数(青(低F)→赤(高F)), 線幅=Z値(ペン圧), 座標:右上が原点(0,0)").pack()
+        
+        # ttkのスタイル設定 (アクセントカラーの定義)
+        style = ttk.Style(self)
+        style.configure("Accent.TButton", foreground='white', background='#4CAF50')
+
 
     def load_csv(self):
         filepath = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
@@ -166,7 +177,7 @@ class PlotterCsvEnhancer(tk.Tk):
                 if 'SpkCmdType' not in row: row['SpkCmdType'] = 'A2'
                 if 'Command' not in row: row['Command'] = row.get('mode', 'G1')
                 
-            self.lbl_status.config(text=f"{len(self.rows)}行")
+            self.lbl_status.config(text=f"ファイル読み込み完了 ({len(self.rows)}行)")
             self.draw_trajectory()
             self.update_listbox()
             messagebox.showinfo("成功", "CSVを読み込みました。")
@@ -298,17 +309,15 @@ class PlotterCsvEnhancer(tk.Tk):
                     processed_rows.append(d1_row)
                     split_d1_inserted = True
                     
-                    # フェーズ2の開始値は、レシピのEnd値を開始として使用
-                    V_start, V_end = recipe["End"]["V_diff"], recipe["End"]["V_diff"]
+                    # フェーズ2の開始値は、レシピのEnd値（F, W, Ratio）を開始として使用
                     F_start, F_end = recipe["End"]["F"], recipe["End"]["F"]
                     W_start, W_end = recipe["End"]["W"], recipe["End"]["W"]
                     
-                    # Ratioもフェーズ2の開始値に設定
                     if is_ratio_interpolated:
-                        Ratio_start = Ratio_end
+                        Ratio_start = recipe["Ratio_End"]
                         
                     current_time = 0 
-                    total_duration = total_duration * 0.4 # フェーズ2の総時間
+                    total_duration = total_duration * 0.4 
 
             # --- 補間計算 ---
             progress = (current_time + duration / 2) / total_duration
@@ -356,7 +365,7 @@ class PlotterCsvEnhancer(tk.Tk):
             a3_row['F'] = ''
             a3_row['Delay_ms'] = ''
             a3_row['SpkCmdType'] = 'A3' # モード17
-            a3_row['SpeakerParams'] = speaker_params # 最後のF, W, V_adj, Ratioを保持
+            a3_row['SpeakerParams'] = speaker_params 
             processed_rows.append(a3_row)
             
         self.rows = processed_rows
@@ -385,7 +394,7 @@ class PlotterCsvEnhancer(tk.Tk):
                     delay_ms = row.get('Delay_ms', '')
                     cell_id = int(row.get('Cell_ID', 0))
                     
-                    speaker_params = row.get('SpeakerParams', "") # data[6]〜data[11]
+                    speaker_params = row.get('SpeakerParams', "") 
                     spk_type_str = row.get('SpkCmdType', 'A0') 
 
                     spk_delay = int(delay_ms) if delay_ms != '' and delay_ms > 0 else 100
@@ -394,7 +403,6 @@ class PlotterCsvEnhancer(tk.Tk):
                     
                     if spk_type_str == 'A2':
                         # モード14 (バンドパス再生)
-                        # data[2]=0, data[3]=14
                         base_params = "0 14" # data[2]=0, data[3]=14
                         spk_cmd = f"1 14 {base_params} {cell_id} 0 {speaker_params}"
                         spk_cmd_line = f"S {spk_cmd}"
@@ -407,7 +415,7 @@ class PlotterCsvEnhancer(tk.Tk):
                         f.write(f"D1 10\n") 
                         continue 
                     
-                    # --- G/A コマンドの出力 ---
+                    # --- G/A コマンドの出力 (Z, F値は元のCSVデータをそのまま使用) ---
                     if cmd in ['A0', 'G0']:
                         f.write(f"G0 X{x:.2f} Y{y:.2f} Z{z:.2f}\n")
                         if spk_cmd_line:
@@ -480,7 +488,6 @@ class PlotterCsvEnhancer(tk.Tk):
             elif cmd in ['A1', 'G1']:
                 if prev_x is not None:
                     z = float(row.get('Z', 0)) 
-                    # 周波数Fの取得 (SpeakerParamsから再構成するか、F列を使用。ここではF列をベースに描画)
                     f = float(row.get('F', 1000))
                     
                     width = max(self.MIN_LINE_WIDTH, min(self.MAX_LINE_WIDTH, self.MIN_LINE_WIDTH + z * 0.75))

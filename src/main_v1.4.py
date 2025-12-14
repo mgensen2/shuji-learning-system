@@ -15,9 +15,13 @@ _RECORD_LOCK = threading.Lock()
 STROKE_COUNT = 0          # A0 を受けるたびにインクリメント
 
 # ★ A0動作時の各ディレイ時間設定 (秒単位)
-DELAY_A0_PRE_MOVE   = 3.0  # ① 移動開始前の待機 (直前の動きが止まってから、この時間待つ)
+DELAY_A0_PRE_MOVE   = 1.0  # ① 移動開始前の待機 (直前の動きが止まってから、この時間待つ)
 DELAY_A0_PRE_SOUND  = 1.0  # ② 移動完了後、音声再生前の待機
 DELAY_A0_POST_SOUND = 0.5  # ③ 音声再生完了後の待機
+
+# ★ 終了時の設定
+ENDING_SOUND_FILE = "end.wav"  # 終了時に流す音声ファイル名 (実行ファイルと同じ場所に置いてください)
+DELAY_ENDING      = 2.0           # 音声が喋り終わった後の待機時間 (秒)
 
 # --- ユーティリティ ----------------------------------------------------------------
 def _safe_serial_write(ser, text):
@@ -42,7 +46,7 @@ def _play_sound_file(path, wait=False):
     wait=True の場合、再生が終わるまで処理をブロックする。
     """
     if not os.path.exists(path):
-        print(f"音声ファイルが見つかりません: {path}")
+        # ファイルがない場合はログだけ出して戻る (wait=Trueなら少し待つ)
         if wait:
             time.sleep(1.0)
         return
@@ -389,7 +393,6 @@ def play_recorded_file(filename, pl, sp):
                         ms = 0
                     delay = (ms / 1000.0) + 0.05
                     print(f"[{lineno}] ホスト側スリープ: {delay}s")
-                    # D1も「動きを止めてから待つ」ためにsyncを入れるとより正確
                     if pl: pl.sync() 
                     time.sleep(delay)
                     if len(tokens) > 2:
@@ -415,10 +418,9 @@ def play_recorded_file(filename, pl, sp):
                     parts = speaker_cmd.split() if speaker_cmd else []
                     is_a0 = (parts and parts[0].upper() == 'A0')
                     
-                    # ★ A0の場合: 前の動作が完全に終わるのを待ってからディレイ
                     if is_a0:
-                        if pl: pl.sync()           # 直前の動作を完了させる
-                        time.sleep(DELAY_A0_PRE_MOVE) # 設定された秒数待機
+                        if pl: pl.sync()
+                        time.sleep(DELAY_A0_PRE_MOVE)
 
                     if pl:
                         try:
@@ -544,23 +546,16 @@ def main():
                             _save_record([line], plot_line)
                             
                             if not (RECORD_FILE and not RECORD_EXECUTE):
-                                # ★ A0専用ロジック (Lookahead的アプローチ)
-                                
-                                # 0. 直前の動作を終わらせる (重要: これがないと動きながらカウントしてしまう)
+                                # ★ A0専用ロジック
                                 pl.sync()
-
-                                # 1. 移動前のディレイ
                                 time.sleep(DELAY_A0_PRE_MOVE)
 
-                                # 2. プロッタ動作
                                 pl.up()
                                 pl.write(data[0], data[1], data[2], 1)
                                 pl.sync() 
 
-                                # 3. 音声再生前のディレイ
                                 time.sleep(DELAY_A0_PRE_SOUND)
 
-                                # 4. 音声再生 (wait=True)
                                 STROKE_COUNT += 1
                                 print(f"画数: {STROKE_COUNT}")
                                 try:
@@ -568,9 +563,7 @@ def main():
                                 except Exception as e:
                                     print(f"A0 音声再生エラー: {e}")
                                 
-                                # 5. 音声再生後のディレイ
                                 time.sleep(DELAY_A0_POST_SOUND)
-
                             else:
                                 print("保存のみモード: A0 実行をスキップ")
                             branch = 1
@@ -586,7 +579,6 @@ def main():
                                     ms = 0
                                 delay = (ms / 1000.0) + 0.05
                                 print(f"delay処理:{ms}ms -> sleep {delay}s")
-                                # D1も念のため同期してから待つ
                                 pl.sync()
                                 time.sleep(delay)
                             else:
@@ -599,7 +591,19 @@ def main():
         except Exception as e:
             print(f"エラーが発生しました: {e}")
 
-        time.sleep(0.5)
+        # --- ★追加: 終了時の音声再生とディレイ ---
+        print("\n--- 処理完了 ---")
+        if os.path.exists(ENDING_SOUND_FILE):
+             print(f"終了音声 ('{ENDING_SOUND_FILE}') を再生します...")
+             # wait=Trueで喋り終わるまで待機
+             _play_sound_file(ENDING_SOUND_FILE, wait=True)
+        else:
+             print(f"終了音声 ('{ENDING_SOUND_FILE}') が見つからないためスキップします。")
+
+        print(f"終了後ディレイ: {DELAY_ENDING}秒...")
+        time.sleep(DELAY_ENDING)
+        # ----------------------------------------
+
         pl.reset()
 
         print("つづけますか？ (y/N)")
