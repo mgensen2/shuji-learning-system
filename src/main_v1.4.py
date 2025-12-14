@@ -15,13 +15,15 @@ _RECORD_LOCK = threading.Lock()
 STROKE_COUNT = 0          # A0 を受けるたびにインクリメント
 
 # ★ A0動作時の各ディレイ時間設定 (秒単位)
-DELAY_A0_PRE_MOVE   = 1.0  # ① 移動開始前の待機 (直前の動きが止まってから、この時間待つ)
-DELAY_A0_PRE_SOUND  = 1.0  # ② 移動完了後、音声再生前の待機
-DELAY_A0_POST_SOUND = 0.5  # ③ 音声再生完了後の待機
+DELAY_A0_PRE_SOUND  = 1.0  # ① 前の画が終わってから、音声が流れる前の待機
+DELAY_A0_POST_SOUND = 0.5  # ② 音声が喋り終わった後の待機
+DELAY_A0_PRE_MOVE   = 1.0  # ③ その後、プロッタが移動し始める前の待機
+DELAY_A0_POST_MOVE  = 1.0  # ④ ★追加: 移動完了後、筆を下ろす前の待機
 
 # ★ 終了時の設定
-ENDING_SOUND_FILE = "end.wav"  # 終了時に流す音声ファイル名 (実行ファイルと同じ場所に置いてください)
-DELAY_ENDING      = 2.0           # 音声が喋り終わった後の待機時間 (秒)
+ENDING_SOUND_FILE = "end.wav"  # 終了時に流す音声ファイル名
+DELAY_PRE_ENDING  = 1.0           # 終了音声が「流れる前」の待機時間
+DELAY_ENDING      = 2.0           # 音声が「喋り終わった後」の待機時間
 
 # --- ユーティリティ ----------------------------------------------------------------
 def _safe_serial_write(ser, text):
@@ -46,7 +48,6 @@ def _play_sound_file(path, wait=False):
     wait=True の場合、再生が終わるまで処理をブロックする。
     """
     if not os.path.exists(path):
-        # ファイルがない場合はログだけ出して戻る (wait=Trueなら少し待つ)
         if wait:
             time.sleep(1.0)
         return
@@ -418,40 +419,53 @@ def play_recorded_file(filename, pl, sp):
                     parts = speaker_cmd.split() if speaker_cmd else []
                     is_a0 = (parts and parts[0].upper() == 'A0')
                     
+                    # ★ A0の場合: 音声 -> 移動 -> ディレイ
                     if is_a0:
-                        if pl: pl.sync()
-                        time.sleep(DELAY_A0_PRE_MOVE)
+                        if pl: pl.sync() # 直前の動きを止める
 
-                    if pl:
+                        # 1. 音声関連
+                        time.sleep(DELAY_A0_PRE_SOUND)
+                        
+                        global STROKE_COUNT
+                        STROKE_COUNT += 1
                         try:
-                            pl.send_stream(plotter_line)
-                            if is_a0:
-                                pl.sync()
+                            # PC側で再生
+                            sp.play_a0_sound(STROKE_COUNT, wait=True)
                         except Exception as e:
-                            print(f"[{lineno}] プロッタ送信エラー: {e}")
-                    
-                    if speaker_cmd:
-                        if is_a0:
-                            time.sleep(DELAY_A0_PRE_SOUND)
+                            print(f"[{lineno}] A0 再生エラー: {e}")
+                        
+                        # スピーカアレイ側にもコマンド送信
+                        if speaker_cmd:
+                             sp.write(speaker_cmd)
+                             if sp.ser: print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
 
-                        if is_a0:
-                            global STROKE_COUNT
-                            STROKE_COUNT += 1
+                        time.sleep(DELAY_A0_POST_SOUND)
+
+                        # 2. 移動関連
+                        time.sleep(DELAY_A0_PRE_MOVE)
+                        
+                        if pl:
                             try:
-                                sp.play_a0_sound(STROKE_COUNT, wait=True)
+                                pl.send_stream(plotter_line)
+                                pl.sync() # 移動完了まで待機
                             except Exception as e:
-                                print(f"[{lineno}] A0 再生エラー: {e}")
-                            
-                            sp.write(speaker_cmd)
-                            if sp.ser:
-                                print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
-                            
-                            time.sleep(DELAY_A0_POST_SOUND)
+                                print(f"[{lineno}] プロッタ送信エラー: {e}")
+                        
+                        # ★追加: 移動後のディレイ
+                        time.sleep(DELAY_A0_POST_MOVE)
 
-                        else:
+                    else:
+                        # A0以外 (通常の描画など) は従来通り
+                        if pl:
+                            try:
+                                pl.send_stream(plotter_line)
+                            except Exception as e:
+                                print(f"[{lineno}] プロッタ送信エラー: {e}")
+                        if speaker_cmd:
                             sp.write(speaker_cmd)
                             if sp.ser:
                                 print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
+
                     continue
                 
                 print(f"[{lineno}] 未知の行形式: {raw}")
@@ -546,24 +560,28 @@ def main():
                             _save_record([line], plot_line)
                             
                             if not (RECORD_FILE and not RECORD_EXECUTE):
-                                # ★ A0専用ロジック
-                                pl.sync()
-                                time.sleep(DELAY_A0_PRE_MOVE)
+                                # ★ A0専用ロジック (順番: 音 -> 移動 -> 移動後Delay)
+                                pl.sync() # 直前の動きを止める
 
-                                pl.up()
-                                pl.write(data[0], data[1], data[2], 1)
-                                pl.sync() 
-
+                                # 1. 音声処理
                                 time.sleep(DELAY_A0_PRE_SOUND)
-
                                 STROKE_COUNT += 1
                                 print(f"画数: {STROKE_COUNT}")
                                 try:
                                     sp.play_a0_sound(STROKE_COUNT, wait=True)
                                 except Exception as e:
                                     print(f"A0 音声再生エラー: {e}")
-                                
                                 time.sleep(DELAY_A0_POST_SOUND)
+
+                                # 2. 移動処理
+                                time.sleep(DELAY_A0_PRE_MOVE)
+                                pl.up()
+                                pl.write(data[0], data[1], data[2], 1)
+                                pl.sync() 
+                                
+                                # 3. ★移動後ディレイ
+                                time.sleep(DELAY_A0_POST_MOVE)
+
                             else:
                                 print("保存のみモード: A0 実行をスキップ")
                             branch = 1
@@ -591,19 +609,25 @@ def main():
         except Exception as e:
             print(f"エラーが発生しました: {e}")
 
-        # --- ★追加: 終了時の音声再生とディレイ ---
+        # --- 終了時の音声再生とディレイ ---
         print("\n--- 処理完了 ---")
+        
+        # 1. 終了音声「前」のディレイ
+        print(f"終了前待機: {DELAY_PRE_ENDING}秒...")
+        time.sleep(DELAY_PRE_ENDING)
+
+        # 2. 音声再生
         if os.path.exists(ENDING_SOUND_FILE):
              print(f"終了音声 ('{ENDING_SOUND_FILE}') を再生します...")
-             # wait=Trueで喋り終わるまで待機
              _play_sound_file(ENDING_SOUND_FILE, wait=True)
         else:
              print(f"終了音声 ('{ENDING_SOUND_FILE}') が見つからないためスキップします。")
 
-        print(f"終了後ディレイ: {DELAY_ENDING}秒...")
+        # 3. 終了音声「後」のディレイ
+        print(f"終了後待機: {DELAY_ENDING}秒...")
         time.sleep(DELAY_ENDING)
-        # ----------------------------------------
-
+        
+        # 4. 原点復帰
         pl.reset()
 
         print("つづけますか？ (y/N)")
