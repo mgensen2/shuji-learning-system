@@ -19,6 +19,11 @@ EIJI_PRINCIPLES = {
     9: {"name": "テスト (cho.txt)",       "cmd_file": "cho.txt",     "voice_file": "voice_test.mp3"},
 }
 
+# --- ★追加: A0動作時の各ディレイ時間設定 (連続モード時のみ有効) ---
+DELAY_A0_PRE_MOVE   = 1.0  # ① 移動開始前の待機
+DELAY_A0_PRE_SOUND  = 1.0  # ② 移動完了後、音声再生前の待機
+DELAY_A0_POST_SOUND = 1.0  # ③ 音声再生後の待機
+
 # --- ユーティリティ ---
 def _safe_serial_write(ser, text):
     """安全なシリアル送信"""
@@ -144,8 +149,11 @@ class Plotter:
 
 # --- 実行ロジック ---
 
-def parse_and_execute_line(line, pl, sp):
-    """1行を解析して実行する"""
+def parse_and_execute_line(line, pl, sp, is_continuous=False):
+    """
+    1行を解析して実行する
+    is_continuous=True の場合のみ、A0コマンド実行時にディレイ制御を行う
+    """
     line = line.strip()
     if not line or line.startswith('#') or line.startswith('['):
         return
@@ -163,17 +171,49 @@ def parse_and_execute_line(line, pl, sp):
         else:
             gcode_part = line
 
-    if gcode_part:
-        pl.send_stream(gcode_part)
-    
-    if speaker_part:
-        sp.write(speaker_part)
-    
-    if not gcode_part and speaker_part:
-        time.sleep(0.02)
+    # --- A0判定 ---
+    # speaker_part に 'A0' が含まれているか確認
+    is_a0 = False
+    if speaker_part and 'A0' in speaker_part:
+        is_a0 = True
+
+    # --- 実行 ---
+    if is_continuous and is_a0:
+        # === 連続モード かつ A0 の場合の特別ロジック ===
+        
+        # 1. 移動前のディレイ
+        time.sleep(DELAY_A0_PRE_MOVE)
+        
+        # 2. プロッタ移動 (筆上げ移動)
+        if gcode_part:
+            pl.send_stream(gcode_part)
+            # ★重要: 音を鳴らす前に移動完了を待つ
+            pl.sync()
+        
+        # 3. 音声再生前のディレイ
+        time.sleep(DELAY_A0_PRE_SOUND)
+        
+        # 4. 音声コマンド送信 (スピーカアレイ側で音が鳴る)
+        if speaker_part:
+            sp.write(speaker_part)
+        
+        # 5. 音声再生後のディレイ
+        time.sleep(DELAY_A0_POST_SOUND)
+
+    else:
+        # === 通常モード または A0以外 ===
+        # 従来通りほぼ同時に送信（スムーズな動き優先）
+        if gcode_part:
+            pl.send_stream(gcode_part)
+        
+        if speaker_part:
+            sp.write(speaker_part)
+        
+        if not gcode_part and speaker_part:
+            time.sleep(0.02)
 
 
-def execute_file(filename, pl, sp):
+def execute_file(filename, pl, sp, is_continuous=False):
     """指定されたファイルを読み込んで実行する"""
     if not os.path.exists(filename):
         print(f"エラー: ファイル '{filename}' が存在しません。")
@@ -187,7 +227,8 @@ def execute_file(filename, pl, sp):
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             for raw in f:
-                parse_and_execute_line(raw, pl, sp)
+                # フラグを引き継ぐ
+                parse_and_execute_line(raw, pl, sp, is_continuous=is_continuous)
                 
     except KeyboardInterrupt:
         print(" 中断されました。")
@@ -200,10 +241,11 @@ def execute_file(filename, pl, sp):
     print("完了\n")
 
 
-def run_principle(p_id, pl, sp, return_home=True):
+def run_principle(p_id, pl, sp, return_home=True, is_continuous=False):
     """
     ひとつの法を実行する
     return_home: Trueなら実行後に原点(X0Y0)に戻る
+    is_continuous: 連続再生モードかどうか
     """
     info = EIJI_PRINCIPLES.get(p_id)
     if not info: return
@@ -215,26 +257,27 @@ def run_principle(p_id, pl, sp, return_home=True):
         print("解説音声を再生します...")
         _play_sound_file(info['voice_file'], wait=True)
     
-    # 動作実行
+    # 動作実行 (フラグを渡す)
     print("動作を開始します...")
-    execute_file(info['cmd_file'], pl, sp)
+    execute_file(info['cmd_file'], pl, sp, is_continuous=is_continuous)
 
-    # ★変更点: フラグがTrueなら原点に戻る
+    # 終了後の原点復帰
     if return_home:
         print("原点へ復帰します...")
         pl.reset()
         pl.sync()
 
 def run_all_principles(pl, sp):
-    """★追加: 全工程を連続実行する"""
+    """全工程を連続実行する (このモードのみDelayが有効)"""
     print("\n====== 永字八法 連続再生モード ======")
     
     # 1番から8番までを対象とする（9番のテストは除外）
     target_ids = sorted([k for k in EIJI_PRINCIPLES.keys() if k != 9])
     
     for pid in target_ids:
-        # 連続実行中は、筆の流れを維持するため各画ごとの原点復帰は行わない
-        run_principle(pid, pl, sp, return_home=False)
+        # ★ここが重要: is_continuous=True を指定
+        # 連続実行中は、筆の流れを維持するため各画ごとの原点復帰は行わない(False)
+        run_principle(pid, pl, sp, return_home=False, is_continuous=True)
         time.sleep(0.5) # 次の画への少しの間
         
     print("\n全工程完了。原点へ復帰します。")
@@ -272,14 +315,14 @@ def main():
             if choice == 'q':
                 break
             elif choice == 'a':
-                # ★追加: 連続再生
+                # ★ 連続再生 (ディレイありモード)
                 run_all_principles(pl, sp)
             else:
                 try:
                     pid = int(choice)
                     if pid in EIJI_PRINCIPLES:
-                        # ★変更: 個別実行時は必ず原点に戻る
-                        run_principle(pid, pl, sp, return_home=True)
+                        # ★ 個別実行時は is_continuous=False (ディレイなし通常モード)
+                        run_principle(pid, pl, sp, return_home=True, is_continuous=False)
                 except ValueError:
                     pass
 

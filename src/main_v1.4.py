@@ -14,7 +14,8 @@ _RECORD_LOCK = threading.Lock()
 
 STROKE_COUNT = 0          # A0 を受けるたびにインクリメント
 
-# ★追加: A0動作時の各ディレイ時間設定 (秒単位で調整可能)
+# ★ A0動作時の各ディレイ時間設定 (秒単位)
+# 再生時・実行時共通で使用されます
 DELAY_A0_PRE_MOVE   = 1.0  # ① 移動開始前の待機
 DELAY_A0_PRE_SOUND  = 1.0  # ② 移動完了後、音声再生前の待機
 DELAY_A0_POST_SOUND = 1.0  # ③ 音声再生後の待機
@@ -343,12 +344,16 @@ def play_recorded_file(filename, pl, sp):
                     continue
                 tokens = raw.split()
                 head = tokens[0].upper()
+                
+                # --- スピーカ単独コマンド (S) ---
                 if head == 'S':
                     speaker_cmd = ' '.join(tokens[1:]) if len(tokens) > 1 else ''
                     if speaker_cmd:
                         sp.write(speaker_cmd)
                         print(f"[{lineno}] スピーカ単独送信: {speaker_cmd}")
                     continue
+
+                # --- 遅延コマンド (D1) ---
                 if head == 'D1' or head.startswith('D'):
                     try:
                         ms = int(tokens[1]) if len(tokens) > 1 else 0
@@ -362,6 +367,8 @@ def play_recorded_file(filename, pl, sp):
                         sp.write(speaker_cmd)
                         print(f"[{lineno}] D1 行内 スピーカ送信: {speaker_cmd}")
                     continue
+                
+                # --- プロッタコマンド (G) ---
                 if head.startswith('G'):
                     split_index = None
                     for i, t in enumerate(tokens):
@@ -375,25 +382,51 @@ def play_recorded_file(filename, pl, sp):
                         plotter_line = ' '.join(tokens)
                         speaker_cmd = None
                     
+                    # A0が含まれているかチェック
+                    parts = speaker_cmd.split() if speaker_cmd else []
+                    is_a0 = (parts and parts[0].upper() == 'A0')
+                    
+                    # ★修正: A0の場合、移動前のDelay
+                    if is_a0:
+                        time.sleep(DELAY_A0_PRE_MOVE)
+
+                    # プロッタへの送信
                     if pl:
                         try:
                             pl.send_stream(plotter_line)
+                            # ★修正: A0の場合、移動完了を待機
+                            if is_a0:
+                                pl.sync()
                         except Exception as e:
                             print(f"[{lineno}] プロッタ送信エラー: {e}")
                     
                     if speaker_cmd:
-                        parts = speaker_cmd.split()
-                        if parts and parts[0].upper() == 'A0':
+                        # ★修正: A0の場合、音声前のDelay
+                        if is_a0:
+                            time.sleep(DELAY_A0_PRE_SOUND)
+
+                        if is_a0:
                             global STROKE_COUNT
                             STROKE_COUNT += 1
                             try:
                                 sp.play_a0_sound(STROKE_COUNT)
                             except Exception as e:
                                 print(f"[{lineno}] A0 再生エラー: {e}")
-                        sp.write(speaker_cmd)
-                        if sp.ser:
-                            print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
+                            
+                            sp.write(speaker_cmd)
+                            if sp.ser:
+                                print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
+                            
+                            # ★修正: A0の場合、音声後のDelay
+                            time.sleep(DELAY_A0_POST_SOUND)
+
+                        else:
+                            # A0以外は通常通り即送信
+                            sp.write(speaker_cmd)
+                            if sp.ser:
+                                print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
                     continue
+                
                 print(f"[{lineno}] 未知の行形式: {raw}")
     except Exception as e:
         print(f"再生エラー: {e}")
@@ -486,8 +519,6 @@ def main():
                             _save_record([line], plot_line)
                             
                             if not (RECORD_FILE and not RECORD_EXECUTE):
-                                # ★修正: A0前後のディレイ処理と実行順序の制御
-                                
                                 # 1. 移動前のディレイ
                                 time.sleep(DELAY_A0_PRE_MOVE)
 
