@@ -149,10 +149,10 @@ class Plotter:
 
 # --- 実行ロジック ---
 
-def parse_and_execute_line(line, pl, sp, is_continuous=False):
+def parse_and_execute_line(line, pl, sp, is_continuous=False, voice_file=None, played_state=None):
     """
     1行を解析して実行する
-    is_continuous=True の場合のみ、A0コマンド実行時にディレイ制御を行う
+    is_continuous=True の場合、A0コマンド実行時に「移動→音声」の順序制御を行う
     """
     line = line.strip()
     if not line or line.startswith('#') or line.startswith('['):
@@ -172,37 +172,39 @@ def parse_and_execute_line(line, pl, sp, is_continuous=False):
             gcode_part = line
 
     # --- A0判定 ---
-    # speaker_part に 'A0' が含まれているか確認
     is_a0 = False
     if speaker_part and 'A0' in speaker_part:
         is_a0 = True
 
-    # --- 実行 ---
+    # --- 実行ロジック ---
     if is_continuous and is_a0:
         # === 連続モード かつ A0 の場合の特別ロジック ===
+        # 順序: Wait -> Move -> Sync -> Wait -> Sound(Explanation) -> Wait -> Write...
         
         # 1. 移動前のディレイ
         time.sleep(DELAY_A0_PRE_MOVE)
         
-        # 2. プロッタ移動 (筆上げ移動)
+        # 2. プロッタ移動 (筆上げ移動: G0...)
         if gcode_part:
             pl.send_stream(gcode_part)
-            # ★重要: 音を鳴らす前に移動完了を待つ
+            # ★重要: 移動が完了するまで待つ
             pl.sync()
         
-        # 3. 音声再生前のディレイ
-        time.sleep(DELAY_A0_PRE_SOUND)
-        
-        # 4. 音声コマンド送信 (スピーカアレイ側で音が鳴る)
+        # 3. 音声再生 (解説ボイス)
+        # まだこのファイルの解説を再生していない場合のみ再生
+        if voice_file and played_state and not played_state[0]:
+            time.sleep(DELAY_A0_PRE_SOUND)
+            print(f"解説音声再生: {voice_file}")
+            _play_sound_file(voice_file, wait=True)
+            played_state[0] = True # 再生済みフラグを立てる
+            time.sleep(DELAY_A0_POST_SOUND)
+
+        # 4. スピーカアレイへのコマンド送信
         if speaker_part:
             sp.write(speaker_part)
         
-        # 5. 音声再生後のディレイ
-        time.sleep(DELAY_A0_POST_SOUND)
-
     else:
         # === 通常モード または A0以外 ===
-        # 従来通りほぼ同時に送信（スムーズな動き優先）
         if gcode_part:
             pl.send_stream(gcode_part)
         
@@ -213,8 +215,11 @@ def parse_and_execute_line(line, pl, sp, is_continuous=False):
             time.sleep(0.02)
 
 
-def execute_file(filename, pl, sp, is_continuous=False):
-    """指定されたファイルを読み込んで実行する"""
+def execute_file(filename, pl, sp, is_continuous=False, voice_file=None):
+    """
+    指定されたファイルを読み込んで実行する
+    is_continuous=Trueのときは voice_file を受け取り、最初のA0で再生する
+    """
     if not os.path.exists(filename):
         print(f"エラー: ファイル '{filename}' が存在しません。")
         return
@@ -224,11 +229,18 @@ def execute_file(filename, pl, sp, is_continuous=False):
     # 動作前にIdle確認
     pl.sync()
 
+    # 解説音声を再生したかどうかのフラグ (参照渡しするためにリスト化)
+    played_state = [False]
+
     try:
         with open(filename, 'r', encoding='utf-8') as f:
             for raw in f:
-                # フラグを引き継ぐ
-                parse_and_execute_line(raw, pl, sp, is_continuous=is_continuous)
+                parse_and_execute_line(
+                    raw, pl, sp, 
+                    is_continuous=is_continuous, 
+                    voice_file=voice_file, 
+                    played_state=played_state
+                )
                 
     except KeyboardInterrupt:
         print(" 中断されました。")
@@ -244,22 +256,31 @@ def execute_file(filename, pl, sp, is_continuous=False):
 def run_principle(p_id, pl, sp, return_home=True, is_continuous=False):
     """
     ひとつの法を実行する
-    return_home: Trueなら実行後に原点(X0Y0)に戻る
-    is_continuous: 連続再生モードかどうか
     """
     info = EIJI_PRINCIPLES.get(p_id)
     if not info: return
 
     print(f"\n=== {info['name']} ===")
     
-    # 解説音声
-    if info.get('voice_file'):
-        print("解説音声を再生します...")
-        _play_sound_file(info['voice_file'], wait=True)
-    
-    # 動作実行 (フラグを渡す)
-    print("動作を開始します...")
-    execute_file(info['cmd_file'], pl, sp, is_continuous=is_continuous)
+    # 音声ファイルのパス
+    v_file = info.get('voice_file')
+
+    # ★モードによる分岐
+    if is_continuous:
+        # 連続モード:
+        # ここでは再生せず、ファイル実行中の「最初の移動(A0)の後」に再生させる
+        # voice_file を execute_file に渡す
+        print("動作を開始します (音声は移動後に再生)...")
+        execute_file(info['cmd_file'], pl, sp, is_continuous=True, voice_file=v_file)
+    else:
+        # 個別モード:
+        # 先に解説音声を再生してから動く (従来通り)
+        if v_file:
+            print("解説音声を再生します...")
+            _play_sound_file(v_file, wait=True)
+        
+        print("動作を開始します...")
+        execute_file(info['cmd_file'], pl, sp, is_continuous=False, voice_file=None)
 
     # 終了後の原点復帰
     if return_home:
@@ -268,17 +289,17 @@ def run_principle(p_id, pl, sp, return_home=True, is_continuous=False):
         pl.sync()
 
 def run_all_principles(pl, sp):
-    """全工程を連続実行する (このモードのみDelayが有効)"""
+    """全工程を連続実行する (このモードのみDelayと移動後音声が有効)"""
     print("\n====== 永字八法 連続再生モード ======")
     
-    # 1番から8番までを対象とする（9番のテストは除外）
+    # 1番から8番までを対象とする
     target_ids = sorted([k for k in EIJI_PRINCIPLES.keys() if k != 9])
     
     for pid in target_ids:
-        # ★ここが重要: is_continuous=True を指定
-        # 連続実行中は、筆の流れを維持するため各画ごとの原点復帰は行わない(False)
+        # 連続実行モードで呼び出し
         run_principle(pid, pl, sp, return_home=False, is_continuous=True)
-        time.sleep(0.5) # 次の画への少しの間
+        # 次の画への少しの間
+        time.sleep(0.5)
         
     print("\n全工程完了。原点へ復帰します。")
     pl.reset()
@@ -286,7 +307,7 @@ def run_all_principles(pl, sp):
 
 # --- メイン ---
 def main():
-    print("=== 永字八法 学習システム (Smooth Motion Ver.) ===")
+    print("=== 永字八法 学習システム (Smart Motion Ver.) ===")
     
     sp_ser = select_port("スピーカアレイ設定")
     if not sp_ser: return
@@ -305,7 +326,6 @@ def main():
     try:
         while True:
             print("\nメニュー:")
-            # 辞書順に表示
             for k in sorted(EIJI_PRINCIPLES.keys()):
                 print(f"  {k}: {EIJI_PRINCIPLES[k]['name']}")
             print("  a: 全てを連続再生 (1〜8)")
@@ -315,13 +335,13 @@ def main():
             if choice == 'q':
                 break
             elif choice == 'a':
-                # ★ 連続再生 (ディレイありモード)
+                # 連続再生 (移動 → 音声 モード)
                 run_all_principles(pl, sp)
             else:
                 try:
                     pid = int(choice)
                     if pid in EIJI_PRINCIPLES:
-                        # ★ 個別実行時は is_continuous=False (ディレイなし通常モード)
+                        # 個別実行 (音声 → 移動 モード)
                         run_principle(pid, pl, sp, return_home=True, is_continuous=False)
                 except ValueError:
                     pass
