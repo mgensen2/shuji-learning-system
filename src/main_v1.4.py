@@ -644,10 +644,10 @@ def main():
         time.sleep(DELAY_PRE_ENDING)
 
         if os.path.exists(ENDING_SOUND_FILE):
-             print(f"終了音声 ('{ENDING_SOUND_FILE}') を再生します...")
-             _play_sound_file(ENDING_SOUND_FILE, wait=True)
+            print(f"終了音声 ('{ENDING_SOUND_FILE}') を再生します...")
+            _play_sound_file(ENDING_SOUND_FILE, wait=True)
         else:
-             print(f"終了音声 ('{ENDING_SOUND_FILE}') が見つからないためスキップします。")
+            print(f"終了音声 ('{ENDING_SOUND_FILE}') が見つからないためスキップします。")
 
         print(f"終了後待機: {DELAY_ENDING}秒...")
         time.sleep(DELAY_ENDING)
