@@ -18,7 +18,7 @@ STROKE_COUNT = 0          # A0 を受けるたびにインクリメント
 DELAY_A0_PRE_SOUND  = 1.0  # ① 前の画が終わってから、音声が流れる前の待機
 DELAY_A0_POST_SOUND = 0.5  # ② 音声が喋り終わった後の待機
 DELAY_A0_PRE_MOVE   = 1.0  # ③ その後、プロッタが移動し始める前の待機
-DELAY_A0_POST_MOVE  = 1.0  # ④ ★追加: 移動完了後、筆を下ろす前の待機
+DELAY_A0_POST_MOVE  = 1.0  # ④ 移動完了後、筆を下ろす前の待機
 
 # ★ 終了時の設定
 ENDING_SOUND_FILE = "end.wav"  # 終了時に流す音声ファイル名
@@ -241,10 +241,9 @@ class Speaker:
     def play_a0_sound(self, idx, wait=False):
         """
         wait=True なら再生完了を待つ。
+        ★修正: プロッタモード(self.ser is None)でもPC音声を再生するため、
+        シリアル接続チェックを外して再生処理を行うように変更。
         """
-        if self.ser is None:
-            return
-
         try:
             fname = f"{int(idx):03d}"
             exts = ('.wav', '.mp3', '.m4a', '.aiff', '.aif')
@@ -263,7 +262,7 @@ class Speaker:
                 return
             
             _play_sound_file(found, wait=wait)
-            print(f"[Speaker] 音声再生完了: {found}")
+            print(f"[PC Audio] 音声再生完了: {found}")
             
         except Exception as e:
             print(f"play_a0_sound エラー: {e}")
@@ -419,22 +418,19 @@ def play_recorded_file(filename, pl, sp):
                     parts = speaker_cmd.split() if speaker_cmd else []
                     is_a0 = (parts and parts[0].upper() == 'A0')
                     
-                    # ★ A0の場合: 音声 -> 移動 -> ディレイ
+                    # ★ A0の場合: 音声 -> 移動 -> 移動後Delay
                     if is_a0:
-                        if pl: pl.sync() # 直前の動きを止める
+                        if pl: pl.sync()
 
                         # 1. 音声関連
                         time.sleep(DELAY_A0_PRE_SOUND)
-                        
                         global STROKE_COUNT
                         STROKE_COUNT += 1
                         try:
-                            # PC側で再生
                             sp.play_a0_sound(STROKE_COUNT, wait=True)
                         except Exception as e:
                             print(f"[{lineno}] A0 再生エラー: {e}")
                         
-                        # スピーカアレイ側にもコマンド送信
                         if speaker_cmd:
                              sp.write(speaker_cmd)
                              if sp.ser: print(f"[{lineno}] スピーカへ送信: {speaker_cmd}")
@@ -443,19 +439,28 @@ def play_recorded_file(filename, pl, sp):
 
                         # 2. 移動関連
                         time.sleep(DELAY_A0_PRE_MOVE)
-                        
                         if pl:
                             try:
                                 pl.send_stream(plotter_line)
-                                pl.sync() # 移動完了まで待機
+                                pl.sync()
                             except Exception as e:
                                 print(f"[{lineno}] プロッタ送信エラー: {e}")
                         
-                        # ★追加: 移動後のディレイ
                         time.sleep(DELAY_A0_POST_MOVE)
 
                     else:
-                        # A0以外 (通常の描画など) は従来通り
+                        # A0以外 (通常の描画など)
+                        # ★修正: スピーカのみモードの時、実行速度が速すぎて音が被るのを防ぐため、擬似的に待機する
+                        if (not pl.ser) and speaker_cmd and (parts and parts[0] in ['A1', 'A2']):
+                             try:
+                                 # A1 1 500 ... の 500(ms) を取得
+                                 ms = int(parts[2])
+                                 sim_delay = ms / 1000.0
+                                 # print(f"  [Simulate] Drawing wait: {sim_delay}s")
+                                 time.sleep(sim_delay)
+                             except Exception:
+                                 pass
+
                         if pl:
                             try:
                                 pl.send_stream(plotter_line)
@@ -548,6 +553,15 @@ def main():
                                     pl.down()
                                     branch = 0
                                 
+                                # ★修正: スピーカのみモードでの高速重複防止
+                                if (not pl.ser):
+                                    try:
+                                        ms = int(tmp[2])
+                                        sim_delay = ms / 1000.0
+                                        time.sleep(sim_delay)
+                                    except:
+                                        pass
+                                
                                 pl.send_stream(plot_line)
                                 sp.write(line)
                             else:
@@ -579,7 +593,7 @@ def main():
                                 pl.write(data[0], data[1], data[2], 1)
                                 pl.sync() 
                                 
-                                # 3. ★移動後ディレイ
+                                # 3. 移動後ディレイ
                                 time.sleep(DELAY_A0_POST_MOVE)
 
                             else:
@@ -612,22 +626,18 @@ def main():
         # --- 終了時の音声再生とディレイ ---
         print("\n--- 処理完了 ---")
         
-        # 1. 終了音声「前」のディレイ
         print(f"終了前待機: {DELAY_PRE_ENDING}秒...")
         time.sleep(DELAY_PRE_ENDING)
 
-        # 2. 音声再生
         if os.path.exists(ENDING_SOUND_FILE):
              print(f"終了音声 ('{ENDING_SOUND_FILE}') を再生します...")
              _play_sound_file(ENDING_SOUND_FILE, wait=True)
         else:
              print(f"終了音声 ('{ENDING_SOUND_FILE}') が見つからないためスキップします。")
 
-        # 3. 終了音声「後」のディレイ
         print(f"終了後待機: {DELAY_ENDING}秒...")
         time.sleep(DELAY_ENDING)
         
-        # 4. 原点復帰
         pl.reset()
 
         print("つづけますか？ (y/N)")
