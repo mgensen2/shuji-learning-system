@@ -22,7 +22,7 @@ DELAY_A0_3_POST_MOVE      = 1.0   # ③ G0移動完了後、開始音声前の�
 DELAY_A0_4_POST_START_SOUND = 0.5 # ④ 開始音声が流れ終わった後、筆を下ろす前の待機
 
 # ★ 終了時の設定
-ENDING_SOUND_FILE = "ending.wav"  # 全工程終了時の音声
+ENDING_SOUND_FILE = "end.wav"  # 全工程終了時の音声
 DELAY_PRE_ENDING  = 1.0           # 終了音声前の待機
 DELAY_ENDING      = 2.0           # 終了音声後の待機
 
