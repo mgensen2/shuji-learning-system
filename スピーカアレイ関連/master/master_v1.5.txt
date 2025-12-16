@@ -72,14 +72,51 @@ const char* preset3[] = {
   "A3 57",
   "A3 64"
 };
-
+const char* preset4[] = {
+  // --- 上辺 (左→右) ---
+  "A1 1 1000 120", // 最初：1000ms
+  "A1 2 300 120",
+  "A1 3 300 120",
+  "A1 4 300 120",
+  "A1 5 300 120",
+  "A1 6 300 120",
+  "A1 7 300 120",
+  "A1 8 300 120",
+  // --- 右辺 (上→下) ---
+  "A1 16 300 120",
+  "A1 24 300 120",
+  "A1 32 300 120",
+  "A1 40 300 120",
+  "A1 48 300 120",
+  "A1 56 300 120",
+  "A1 64 300 120",
+  // --- 下辺 (右→左) ---
+  "A1 63 300 120",
+  "A1 62 300 120",
+  "A1 61 300 120",
+  "A1 60 300 120",
+  "A1 59 300 120",
+  "A1 58 300 120",
+  "A1 57 300 120",
+  // --- 左辺 (下→上) ---
+  "A1 49 300 120",
+  "A1 41 300 120",
+  "A1 33 300 120",
+  "A1 25 300 120",
+  "A1 17 300 120",
+  "A1 9 1000 120"  // 最後：1000ms
+};
 
 // --- システム用定義 (通常は編集不要) ---
-const char** presets[] = { preset1, preset2, preset3 };
+// プリセット4を追加
+const char** presets[] = { preset1, preset2, preset3, preset4 };
+
+// サイズ定義にもpreset4を追加
 const int preset_sizes[] = {
   sizeof(preset1) / sizeof(preset1[0]),
   sizeof(preset2) / sizeof(preset2[0]),
-  sizeof(preset3) / sizeof(preset3[0])
+  sizeof(preset3) / sizeof(preset3[0]),
+  sizeof(preset4) / sizeof(preset4[0])
 };
 const int NUM_PRESETS = sizeof(presets) / sizeof(presets[0]);
 //=================================================================
