@@ -33,6 +33,12 @@
             color: #666;
             margin-top: 5px;
         }
+        /* ボタン同士の間隔を少し空ける */
+        button {
+            margin: 0 5px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -43,6 +49,7 @@
         <label><strong>CSVファイルを選択:</strong></label>
         <input type="file" id="csvFileInput" accept=".csv">
         <button id="drawBtn">描画する</button>
+        <button id="saveBtn">画像を保存</button>
         <div class="info">※ unpitsu_data_full.csv を選択してください</div>
     </div>
 

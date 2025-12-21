@@ -3,20 +3,28 @@ window.addEventListener('load', () => {
     const ctx = canvas.getContext('2d');
     const fileInput = document.getElementById('csvFileInput');
     const drawBtn = document.getElementById('drawBtn');
+    const saveBtn = document.getElementById('saveBtn');
 
-    // --- 設定項目 (記録ツールと合わせる) ---
+    // --- 設定項目 ---
     const GRID_SIZE = 8;
     const COORD_LIMIT = 200;
     
-    // キャンバスサイズ (初期値)
-    let canvasSize = 600; 
+    // キャンバスサイズ
+    let canvasSize = 800; 
     canvas.width = canvasSize;
     canvas.height = canvasSize;
+
+    // 現在描画中のデータを保持する変数（再描画用）
+    let currentData = [];
 
     // ----------------------------------------
     // イベントリスナー
     // ----------------------------------------
     drawBtn.addEventListener('click', handleFileSelect);
+
+    if (saveBtn) {
+        saveBtn.addEventListener('click', saveImage);
+    }
 
     // ----------------------------------------
     // メイン処理
@@ -46,12 +54,43 @@ window.addEventListener('load', () => {
             }
 
             if (data.length > 0) {
-                drawReplay(data);
+                currentData = data; // データを保存しておく
+                // 通常描画：グリッドあり(true), 番号あり(true)
+                drawReplay(data, true, true); 
             } else {
                 alert("有効なデータが見つかりませんでした。");
             }
         };
         reader.readAsText(file);
+    }
+
+    // ----------------------------------------
+    // 画像保存処理
+    // ----------------------------------------
+    function saveImage() {
+        // 1. グリッドなし(false)、番号なし(false)で再描画
+        if (currentData.length > 0) {
+            drawReplay(currentData, false, false); 
+        } else {
+            // データ未読み込み時（空白の紙として保存する場合）
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // グリッド等を描かないならこれだけでOK
+        }
+
+        // 2. 画像として保存
+        const link = document.createElement('a');
+        link.download = 'unpitsu_replay.png';
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+
+        // 3. 画面表示用に元に戻す：グリッドあり(true), 番号あり(true)
+        if (currentData.length > 0) {
+            drawReplay(currentData, true, true);
+        } else {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGridAndNumbers(true, true);
+        }
     }
 
     // ----------------------------------------
@@ -75,13 +114,13 @@ window.addEventListener('load', () => {
             if (row.length < headers.length) continue;
 
             data.push({
-                type: 'full', // データソース識別用
+                type: 'full',
                 event_type: row[idxType].trim(),
                 x: parseFloat(row[idxX]),
                 y: parseFloat(row[idxY]),
                 pressure: idxPress !== -1 ? parseFloat(row[idxPress]) : 1.0,
                 stroke_id: idxStroke !== -1 ? parseInt(row[idxStroke]) : 0,
-                is_drawing: row[idxType].trim() !== 'up' // up以外は描画候補
+                is_drawing: row[idxType].trim() !== 'up'
             });
         }
         return data;
@@ -96,7 +135,6 @@ window.addEventListener('load', () => {
 
         const headers = lines[0].split(',').map(h => h.trim());
         
-        // Command,X,Y,Z,F,Delay_ms,Cell_ID
         const idxCmd = headers.indexOf('Command');
         const idxX = headers.indexOf('X');
         const idxY = headers.indexOf('Y');
@@ -119,19 +157,15 @@ window.addEventListener('load', () => {
             const y = parseFloat(row[idxY]);
             const z = idxZ !== -1 ? parseFloat(row[idxZ]) : 0;
 
-            // A0: 移動 (ペン上げ) -> 新しいストローク開始
-            // A1: 描画 (ペン下げ)
-            // D1: 待機 (その場に留まる)
-
             let isDrawing = false;
             
-            if (cmd === 'A0') {
-                strokeCount++; // 新しいストロークとみなす
-                isDrawing = false; // 移動のみ
-            } else if (cmd === 'A1') {
+            if (cmd === 'A0' || cmd === 'G0') {
+                strokeCount++; 
+                isDrawing = false; 
+            } else if (cmd === 'A1' || cmd === 'G1') {
                 isDrawing = true;
             } else if (cmd === 'D1') {
-                isDrawing = true; // 待機中も描画状態継続とみなす(点になる)
+                isDrawing = true; 
             }
 
             data.push({
@@ -149,22 +183,28 @@ window.addEventListener('load', () => {
 
     // ----------------------------------------
     // 描画処理
+    // 引数 drawGrid: trueなら罫線あり
+    // 引数 drawNumbers: trueなら番号あり
     // ----------------------------------------
-    function drawReplay(data) {
+    function drawReplay(data, drawGrid = true, drawNumbers = true) {
+        // キャンバスをクリア
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // ★重要: 保存時に背景が透明にならないよう白で塗りつぶす
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        drawGridAndNumbers();
+        // 背景・グリッド描画
+        drawGridAndNumbers(drawGrid, drawNumbers);
 
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
-        // ストロークごとに色を変えるためのパレット
         const colors = ['#000000', '#FF0000', '#0000FF', '#008000', '#FFA500', '#800080'];
 
-        // 座標変換関数
         const toPixel = (val, isX) => {
-            if (isX) return ((val / COORD_LIMIT) + 1.0) * canvasSize; // X
-            else return (val / -COORD_LIMIT) * canvasSize;            // Y
+            if (isX) return ((val / COORD_LIMIT) + 1.0) * canvasSize;
+            else return (val / -COORD_LIMIT) * canvasSize;
         };
 
         let isPenDown = false;
@@ -176,25 +216,20 @@ window.addEventListener('load', () => {
             const px = toPixel(point.x, true);
             const py = toPixel(point.y, false);
             
-            // 筆圧 (Plotterデータの場合はZ=0-8, Fullデータの場合はpressure=0-8)
             const pressure = point.pressure || 0;
             const lineWidth = Math.max(1, pressure * 1.5);
 
-            // 色決定
             const colorIdx = (point.stroke_id - 1) % colors.length;
             const color = colors[colorIdx >= 0 ? colorIdx : 0];
 
             ctx.lineWidth = lineWidth;
             ctx.strokeStyle = color;
-            ctx.fillStyle = color; // 点描画用
+            ctx.fillStyle = color;
 
-            // --- 描画ロジック ---
             if (point.type === 'full') {
-                // Full CSV (event_type ベース)
                 if (point.event_type === 'down') {
                     isPenDown = true;
                     lastX = px; lastY = py;
-                    // 開始点に丸を描く
                     ctx.beginPath();
                     ctx.arc(px, py, lineWidth / 2, 0, Math.PI * 2);
                     ctx.fill();
@@ -211,27 +246,25 @@ window.addEventListener('load', () => {
                     lastX = null; lastY = null;
                 }
             } else {
-                // Plotter CSV (Command ベース)
-                if (point.command === 'A0') {
-                    // 移動 (ペン上げ)
+                const isMoveCommand = (point.command === 'A0' || point.command === 'G0');
+                const isDrawCommand = (point.command === 'A1' || point.command === 'G1' || point.command === 'D1');
+
+                if (isMoveCommand) {
                     isPenDown = false;
-                    lastX = px; lastY = py; // 次の始点として記録
-                } else if (point.command === 'A1' || point.command === 'D1') {
-                    // 描画 or 待機
+                    lastX = px; lastY = py;
+                } else if (isDrawCommand) {
                     if (lastX !== null) {
                         ctx.beginPath();
                         ctx.moveTo(lastX, lastY);
                         ctx.lineTo(px, py);
                         ctx.stroke();
                         
-                        // D1 (待機) の場所には強調表示 (オプション)
                         if (point.command === 'D1') {
                             ctx.beginPath();
                             ctx.arc(px, py, lineWidth * 1.5, 0, Math.PI * 2);
                             ctx.fill();
                         }
                     } else {
-                        // 最初の点 (A0なしでいきなりA1が来た場合など)
                         ctx.beginPath();
                         ctx.arc(px, py, lineWidth / 2, 0, Math.PI * 2);
                         ctx.fill();
@@ -245,41 +278,46 @@ window.addEventListener('load', () => {
     // ----------------------------------------
     // グリッドと番号の描画
     // ----------------------------------------
-    function drawGridAndNumbers() {
+    function drawGridAndNumbers(drawGrid = true, drawNumbers = true) {
         const cellSize = canvasSize / GRID_SIZE;
 
-        // グリッド線
-        ctx.strokeStyle = '#e0e0e0';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let i = 1; i < GRID_SIZE; i++) {
-            ctx.moveTo(i * cellSize, 0);
-            ctx.lineTo(i * cellSize, canvas.height);
-            ctx.moveTo(0, i * cellSize);
-            ctx.lineTo(canvas.width, i * cellSize);
+        // グリッド線と外枠 (drawGridがtrueの時だけ描画)
+        if (drawGrid) {
+            ctx.strokeStyle = '#e0e0e0';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let i = 1; i < GRID_SIZE; i++) {
+                ctx.moveTo(i * cellSize, 0);
+                ctx.lineTo(i * cellSize, canvas.height);
+                ctx.moveTo(0, i * cellSize);
+                ctx.lineTo(canvas.width, i * cellSize);
+            }
+            ctx.stroke();
+
+            // 外枠
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, canvas.width, canvas.height);
         }
-        ctx.stroke();
 
-        // 外枠
-        ctx.strokeStyle = '#333';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(0, 0, canvas.width, canvas.height);
+        // セル番号 (drawNumbersがtrueの時だけ描画)
+        if (drawNumbers) {
+            ctx.fillStyle = '#ccc'; 
+            ctx.font = '20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
 
-        // セル番号
-        ctx.fillStyle = '#ccc'; 
-        ctx.font = '20px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        for (let y = 0; y < GRID_SIZE; y++) {
-            for (let x = 0; x < GRID_SIZE; x++) {
-                const cellId = (y * GRID_SIZE) + x + 1; 
-                const centerX = x * cellSize + (cellSize / 2);
-                const centerY = y * cellSize + (cellSize / 2);
-                ctx.fillText(cellId, centerX, centerY);
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cellId = (y * GRID_SIZE) + x + 1; 
+                    const centerX = x * cellSize + (cellSize / 2);
+                    const centerY = y * cellSize + (cellSize / 2);
+                    ctx.fillText(cellId, centerX, centerY);
+                }
             }
         }
     }
     
-    drawGridAndNumbers();
+    // 初期表示（両方あり）
+    drawGridAndNumbers(true, true);
 });
