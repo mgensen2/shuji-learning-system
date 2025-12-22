@@ -5,6 +5,20 @@ import numpy as np
 import os
 import pandas as pd
 
+# --- 【重要】日本語パス対応の画像読み込み関数 ---
+def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
+    """
+    日本語（全角文字）を含むパスから画像を読み込むための関数
+    np.fromfile でバイナリとして読み込み、cv2.imdecode で画像変換する
+    """
+    try:
+        n = np.fromfile(filename, np.uint8)
+        img = cv2.imdecode(n, flags)
+        return img
+    except Exception as e:
+        print(f"Read Error: {e}")
+        return None
+
 # --- 画像処理ロジック (サイズ正規化 & 重心合わせ) ---
 
 def normalize_char_shape(img_bin, canvas_size=(300, 300)):
@@ -12,62 +26,64 @@ def normalize_char_shape(img_bin, canvas_size=(300, 300)):
     文字部分だけを切り出し、アスペクト比を維持して
     キャンバスサイズいっぱいにリサイズ・中央配置する関数
     """
-    # 1. 文字領域（Bounding Box）を見つける
     coords = cv2.findNonZero(img_bin)
     if coords is None:
-        return np.zeros(canvas_size, dtype=np.uint8) # 文字なしの場合は真っ黒
+        return np.zeros(canvas_size, dtype=np.uint8)
         
     x, y, w, h = cv2.boundingRect(coords)
-    char_roi = img_bin[y:y+h, x:x+w] # 文字部分だけ切り抜き
+    char_roi = img_bin[y:y+h, x:x+w]
     
-    # 2. アスペクト比を維持してリサイズ計算
-    # キャンバスに収まる最大の拡大率を計算 (余白を少し持たせるため 0.9倍)
     h_roi, w_roi = char_roi.shape
     target_w, target_h = canvas_size
     
+    # 拡大率の計算（余白0.9倍）
     scale = min(target_w / w_roi, target_h / h_roi) * 0.9
     
-    new_w = int(w_roi * scale)
-    new_h = int(h_roi * scale)
+    new_w = int(max(1, w_roi * scale)) # 0にならないよう対策
+    new_h = int(max(1, h_roi * scale))
     
-    if new_w <= 0 or new_h <= 0:
-        return np.zeros(canvas_size, dtype=np.uint8)
-        
-    # リサイズ実行
     resized_char = cv2.resize(char_roi, (new_w, new_h), interpolation=cv2.INTER_AREA)
     
-    # 3. キャンバス中央に配置
     canvas = np.zeros(canvas_size, dtype=np.uint8)
     
     start_x = (target_w - new_w) // 2
     start_y = (target_h - new_h) // 2
     
-    canvas[start_y:start_y+new_h, start_x:start_x+new_w] = resized_char
+    # 範囲外エラーを防ぐクリッピング
+    end_x = min(start_x + new_w, target_w)
+    end_y = min(start_y + new_h, target_h)
+    
+    # 貼り付けサイズの調整（1pxのズレ対策）
+    paste_w = end_x - start_x
+    paste_h = end_y - start_y
+    
+    canvas[start_y:end_y, start_x:end_x] = resized_char[:paste_h, :paste_w]
     
     return canvas
 
 def calculate_iou_normalized(target_path, subject_path):
-    """
-    正規化処理付きのIoU計算
-    """
-    # グレースケール読み込み
-    img_target = cv2.imread(target_path, 0)
-    img_subject = cv2.imread(subject_path, 0)
+    """正規化処理付きのIoU計算"""
+    
+    # --- 【変更点】日本語対応の読み込み関数を使用 ---
+    img_target = imread_jp(target_path, cv2.IMREAD_GRAYSCALE)
+    img_subject = imread_jp(subject_path, cv2.IMREAD_GRAYSCALE)
+    # ---------------------------------------------
 
-    if img_target is None or img_subject is None:
+    if img_target is None:
+        print(f"Error: お手本画像が読めません: {target_path}")
+        return None
+    if img_subject is None:
+        print(f"Error: 被験者画像が読めません: {subject_path}")
         return None
 
     # 二値化 (Otsu) -> 白文字(255), 黒背景(0) に統一
-    # ※実験画像が「白背景・黒文字」なら THRESH_BINARY_INV を使う
-    # ここでは一般的な「白背景」を想定して反転(INV)させます
+    # ※白背景・黒文字画像の場合は反転(INV)が必要
     _, bin_target = cv2.threshold(img_target, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     _, bin_subject = cv2.threshold(img_subject, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    # --- 【重要】 ここでサイズと位置を強制的に合わせる ---
-    # 両方を共通のキャンバス(300x300)に正規化
+    # サイズと位置の正規化
     norm_target = normalize_char_shape(bin_target)
     norm_subject = normalize_char_shape(bin_subject)
-    # --------------------------------------------------
 
     # IoU計算
     intersection = cv2.bitwise_and(norm_target, norm_subject)
@@ -85,10 +101,10 @@ def calculate_iou_normalized(target_path, subject_path):
 class IoUApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("書字IoU評価ツール (サイズ自動補正版)")
+        self.root.title("書字IoU評価ツール (日本語パス対応版)")
         self.root.geometry("1000x700")
 
-        self.targets = {} # { "ラベル名": "ファイルパス" }
+        self.targets = {} 
         self.file_map = [] 
 
         # --- UI Layout ---
@@ -113,13 +129,11 @@ class IoUApp:
         frame_list = tk.Frame(root)
         frame_list.pack(fill="both", expand=True, padx=10, pady=5)
         
-        # ヘッダー
         h_frame = tk.Frame(frame_list)
         h_frame.pack(fill="x")
         tk.Label(h_frame, text="ファイル名", width=40, anchor="w", font=("bold")).pack(side="left")
         tk.Label(h_frame, text="比較対象のお手本", width=30, anchor="w", font=("bold")).pack(side="left")
 
-        # スクロールエリア
         canvas = tk.Canvas(frame_list, bg="white")
         scrollbar = tk.Scrollbar(frame_list, orient="vertical", command=canvas.yview)
         self.scroll_frame = tk.Frame(canvas, bg="white")
@@ -143,6 +157,7 @@ class IoUApp:
         if not paths: return
         
         for p in paths:
+            # 拡張子なしのファイル名をラベルにする
             name = os.path.splitext(os.path.basename(p))[0]
             self.targets[name] = p
             
@@ -154,10 +169,8 @@ class IoUApp:
         if not d: return
         self.lbl_dir.config(text=d)
         
-        # ファイルリスト取得
         files = sorted([f for f in os.listdir(d) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
         
-        # リセット
         for w in self.scroll_frame.winfo_children(): w.destroy()
         self.file_map = []
         
@@ -167,8 +180,8 @@ class IoUApp:
             
             tk.Label(row_frame, text=f, width=45, anchor="w", bg="white").pack(side="left")
             
-            # 自動マッチング
             var = tk.StringVar()
+            # 簡易自動マッチング（ファイル名にお手本ラベルが含まれているか）
             matched = next((k for k in self.targets if k in f), "")
             var.set(matched)
             
@@ -178,10 +191,8 @@ class IoUApp:
             self.file_map.append({"name": f, "path": os.path.join(d, f), "var": var})
 
     def refresh_combos(self):
-        # お手本リスト更新時にプルダウンの選択肢を更新
         opts = list(self.targets.keys())
         for item in self.scroll_frame.winfo_children():
-            # 子ウィジェットの中からComboboxを探す
             for child in item.winfo_children():
                 if isinstance(child, ttk.Combobox):
                     child['values'] = opts
@@ -195,8 +206,6 @@ class IoUApp:
         if not save_path: return
         
         results = []
-        
-        # プログレス表示（簡易）
         total = len(self.file_map)
         
         for i, item in enumerate(self.file_map):
@@ -212,9 +221,8 @@ class IoUApp:
             results.append([item["name"], t_label, val])
             
             if i % 10 == 0:
-                print(f"Processing {i}/{total}...")
+                print(f"Processing {i}/{total}: {item['name']}")
         
-        # 保存
         try:
             df = pd.DataFrame(results, columns=["FileName", "Target_Label", "IoU_Score"])
             df.to_csv(save_path, index=False, encoding="utf-8-sig")
