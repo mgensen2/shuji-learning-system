@@ -6,8 +6,9 @@ import os
 import pandas as pd
 import re
 
-# --- 設定: 線を太らせる回数 ---
-DILATE_ITER = 7  # 文字を太くしてIoUを安定させる（3~5推奨）
+# --- 設定: 太らせる回数を分ける ---
+TARGET_DILATE = 12   # お手本(線画)はガッツリ太くして「許容範囲」を作る
+SUBJECT_DILATE = 1   # 手書き(筆)はもともと太いので、穴埋め程度にする
 
 # --- 日本語パス対応 画像読み込み ---
 def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
@@ -16,10 +17,51 @@ def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
         img = cv2.imdecode(n, flags)
         return img
     except Exception as e:
-        # print(f"Error reading {filename}: {e}")
         return None
 
-# --- 画像の前処理（正規化・太らせる） ---
+# --- ★追加: 影やノイズを除去する関数 ---
+def remove_shadows_and_noise(img_bin):
+    # 連結成分分析（塊ごとのラベル付け）
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img_bin, connectivity=8)
+    
+    img_h, img_w = img_bin.shape
+    new_img = np.zeros_like(img_bin)
+    
+    # 面積が最大の「文字らしい」成分を探す
+    max_area = 0
+    best_label = -1
+    
+    for i in range(1, num_labels): # ラベル0は背景なのでスキップ
+        x, y, w, h, area = stats[i]
+        
+        # 端に接している塊（影の可能性大）を除外
+        # 上下左右の端から数ピクセル以内にあるか
+        is_touching_edge = (x <= 1) or (y <= 1) or (x + w >= img_w - 1) or (y + h >= img_h - 1)
+        
+        # ただし、画面中央を大きく占めるような「巨大な文字」が端に触れている場合は残したいので
+        # アスペクト比（縦横比）で「細長い影」だけを消すロジックにする
+        aspect_ratio = h / w if w > 0 else 0
+        
+        # 「端に接している」かつ「極端に細長い（影っぽい）」なら無視
+        if is_touching_edge and (aspect_ratio > 5.0 or aspect_ratio < 0.2):
+            continue
+            
+        # ノイズ除去（小さすぎるゴミは無視）
+        if area < 50: 
+            continue
+
+        # 一番大きい塊を記憶
+        if area > max_area:
+            max_area = area
+            best_label = i
+            
+    # 選ばれた塊だけを描画
+    if best_label != -1:
+        new_img[labels == best_label] = 255
+        
+    return new_img
+
+# --- 画像の正規化（修正版） ---
 def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     coords = cv2.findNonZero(img_bin)
     if coords is None: return np.zeros(canvas_size, dtype=np.uint8)
@@ -29,7 +71,8 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     
     h_roi, w_roi = char_roi.shape
     target_w, target_h = canvas_size
-    # 余白を少し持たせる (0.9倍)
+    
+    # スケール計算（余白0.9倍）
     scale = min(target_w / w_roi, target_h / h_roi) * 0.9
     new_w, new_h = int(max(1, w_roi * scale)), int(max(1, h_roi * scale))
     
@@ -39,6 +82,7 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     start_x, start_y = (target_w - new_w) // 2, (target_h - new_h) // 2
     canvas[start_y:start_y+new_h, start_x:start_x+new_w] = resized_char
     
+    # 膨張処理（太らせる）
     if dilate_iter > 0:
         kernel = np.ones((3,3), np.uint8)
         canvas = cv2.dilate(canvas, kernel, iterations=dilate_iter)
@@ -55,19 +99,14 @@ def calc_iou_and_save(img_target, img_subject, save_path):
     
     iou = area_inter / area_union if area_union > 0 else 0.0
     
-    # デバッグ画像作成（カラー）
-    # Green: Target, Red: Subject
+    # 緑:お手本(Target), 赤:手書き(Subject), 黄:重なり
     debug_img = np.zeros((img_target.shape[0], img_target.shape[1], 3), dtype=np.uint8)
-    debug_img[:, :, 1] = img_target
-    debug_img[:, :, 2] = img_subject
-    
-    # 視認性向上のため明るく
-    debug_img = cv2.convertScaleAbs(debug_img, alpha=1.5, beta=0)
+    debug_img[:, :, 1] = img_target # G
+    debug_img[:, :, 2] = img_subject # R
     
     cv2.putText(debug_img, f"IoU: {iou:.3f}", (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
     
-    # 保存
     try:
         ext = os.path.splitext(save_path)[1]
         result, n = cv2.imencode(ext, debug_img)
@@ -83,34 +122,33 @@ def calc_iou_and_save(img_target, img_subject, save_path):
 class IoUAutoMatchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("IoU計算 (CSV自動連携・ゼロ埋め対応版)")
+        self.root.title("IoU計算 (影除去 & 太さ調整版)")
         self.root.geometry("650x500")
         
-        # 変数
         self.targets = {} 
         self.csv_path = tk.StringVar()
         self.root_dir = tk.StringVar()
         
-        # Step 1: お手本
-        f1 = tk.LabelFrame(root, text="Step 1: お手本画像 (ファイル名に cho, kou, ko を含むもの)", padx=5, pady=5)
+        # Step 1
+        f1 = tk.LabelFrame(root, text="Step 1: お手本画像 (cho, kou, ko)", padx=5, pady=5)
         f1.pack(fill="x", padx=10, pady=5)
-        tk.Button(f1, text="画像を選択 (複数可)", command=self.load_targets).pack(side="left")
+        tk.Button(f1, text="画像を選択", command=self.load_targets).pack(side="left")
         self.lbl_targets = tk.Label(f1, text="未登録")
         self.lbl_targets.pack(side="left", padx=10)
 
-        # Step 2: CSV
-        f2 = tk.LabelFrame(root, text="Step 2: 実験進行チェックシート (CSV)", padx=5, pady=5)
+        # Step 2
+        f2 = tk.LabelFrame(root, text="Step 2: CSVファイル", padx=5, pady=5)
         f2.pack(fill="x", padx=10, pady=5)
         tk.Button(f2, text="CSVを選択", command=self.load_csv).pack(side="left")
         tk.Label(f2, textvariable=self.csv_path).pack(side="left", padx=10)
 
-        # Step 3: フォルダ
-        f3 = tk.LabelFrame(root, text="Step 3: データ親フォルダ (中に002, 003...)", padx=5, pady=5)
+        # Step 3
+        f3 = tk.LabelFrame(root, text="Step 3: データフォルダ", padx=5, pady=5)
         f3.pack(fill="x", padx=10, pady=5)
         tk.Button(f3, text="フォルダを選択", command=self.load_dir).pack(side="left")
         tk.Label(f3, textvariable=self.root_dir).pack(side="left", padx=10)
 
-        # Step 4: 実行
+        # Step 4
         tk.Button(root, text="実行 & CSV保存", command=self.run, bg="#4CAF50", fg="white", height=2).pack(fill="x", padx=10, pady=20)
 
     def load_targets(self):
@@ -131,7 +169,9 @@ class IoUAutoMatchApp:
                 img = imread_jp(p)
                 if img is not None:
                     _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    self.targets[key] = normalize_and_process(bin_img, dilate_iter=DILATE_ITER)
+                    # ★重要: お手本は「線」なので、ガッツリ太らせる (TARGET_DILATE)
+                    # お手本は綺麗なので remove_shadows は不要
+                    self.targets[key] = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
                     loaded_names.append(f"{fname}->{key}")
         
         self.lbl_targets.config(text=f"登録済み: {', '.join(loaded_names)}")
@@ -152,60 +192,41 @@ class IoUAutoMatchApp:
         save_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
         if not save_path: return
 
-        # デバッグフォルダ作成
         debug_dir = os.path.join(os.path.dirname(save_path), "debug_images")
-        if not os.path.exists(debug_dir):
-            os.makedirs(debug_dir)
+        if not os.path.exists(debug_dir): os.makedirs(debug_dir)
 
-        # CSV読み込み
         try:
             df_sheet = pd.read_csv(self.csv_path.get())
         except:
             df_sheet = pd.read_csv(self.csv_path.get(), encoding='shift_jis')
 
-        # ID列の文字列化（.0削除対応）
         if '被験者ID(記入用)' in df_sheet.columns:
             df_sheet['被験者ID(記入用)'] = df_sheet['被験者ID(記入用)'].astype(str).str.replace('.0', '', regex=False)
-        else:
-            messagebox.showerror("エラー", "CSVに「被験者ID(記入用)」列が見つかりません。")
-            return
 
         results = []
         count = 0
         
-        # フォルダ巡回
         for root, dirs, files in os.walk(self.root_dir.get()):
             img_files = [f for f in files if f.lower().endswith(('.png', '.jpg'))]
             if not img_files: continue
 
-            sub_id = os.path.basename(root) # フォルダ名 "004"
+            sub_id = os.path.basename(root)
             print(f"Folder: {sub_id}")
 
             for f in img_files:
-                # 通し番号抽出 (1.png -> 1)
                 num_match = re.search(r'\d+', f)
                 if not num_match: continue
                 num = int(num_match.group())
 
-                # ★柔軟なIDマッチング（数字として比較）
                 try:
                     target_id_int = int(sub_id)
-                    # CSV側でIDを数値化して検索
                     df_sheet['id_temp_int'] = pd.to_numeric(df_sheet['被験者ID(記入用)'], errors='coerce')
-                    row = df_sheet[
-                        (df_sheet['id_temp_int'] == target_id_int) & 
-                        (df_sheet['通し番号'] == num)
-                    ]
+                    row = df_sheet[(df_sheet['id_temp_int'] == target_id_int) & (df_sheet['通し番号'] == num)]
                 except:
-                    # 数値変換できない場合は文字列一致で検索
-                    row = df_sheet[
-                        (df_sheet['被験者ID(記入用)'] == sub_id) & 
-                        (df_sheet['通し番号'] == num)
-                    ]
+                    row = df_sheet[(df_sheet['被験者ID(記入用)'] == sub_id) & (df_sheet['通し番号'] == num)]
 
                 if row.empty: continue
 
-                # 正解文字
                 correct_char_str = str(row.iloc[0]['文字'])
                 target_key = None
                 if '刁' in correct_char_str: target_key = '刁'
@@ -214,13 +235,17 @@ class IoUAutoMatchApp:
 
                 if not target_key or target_key not in self.targets: continue
 
-                # 計算
                 f_path = os.path.join(root, f)
                 img = imread_jp(f_path)
                 if img is None: continue
 
                 _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                norm_sub = normalize_and_process(bin_img, dilate_iter=DILATE_ITER)
+                
+                # ★重要1: 手書き画像から「影」を除去する
+                clean_bin = remove_shadows_and_noise(bin_img)
+                
+                # ★重要2: 手書き画像はほとんど太らせない (SUBJECT_DILATE)
+                norm_sub = normalize_and_process(clean_bin, dilate_iter=SUBJECT_DILATE)
                 
                 dbg_name = f"{sub_id}_{num}_{target_key}.png"
                 dbg_path = os.path.join(debug_dir, dbg_name)
@@ -240,11 +265,9 @@ class IoUAutoMatchApp:
 
         if results:
             pd.DataFrame(results).to_csv(save_path, index=False, encoding='utf-8-sig')
-            messagebox.showinfo("完了", f"{count}件の処理が完了しました。\n保存先: {save_path}")
-        else:
-            messagebox.showwarning("警告", "処理対象が1件もありませんでした。CSVのIDとフォルダ名を確認してください。")
+            messagebox.showinfo("完了", f"{count}件完了\n{save_path}")
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = IoUAutoMatchApp(root)  # アプリをインスタンス化
-    root.mainloop()              # rootでループを開始（これが正解）
+    app = IoUAutoMatchApp(root)
+    root.mainloop()
