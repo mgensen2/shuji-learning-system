@@ -54,9 +54,9 @@ window.addEventListener('load', () => {
             }
 
             if (data.length > 0) {
-                currentData = data; // データを保存しておく
-                // 通常描画：グリッドあり(true), 番号あり(true)
-                drawReplay(data, true, true); 
+                currentData = data; 
+                // 通常描画：グリッドあり, 番号あり, 色は通常(forceBlack=false)
+                drawReplay(data, true, true, false); 
             } else {
                 alert("有効なデータが見つかりませんでした。");
             }
@@ -68,14 +68,14 @@ window.addEventListener('load', () => {
     // 画像保存処理
     // ----------------------------------------
     function saveImage() {
-        // 1. グリッドなし(false)、番号なし(false)で再描画
+        // 1. 保存用に描画しなおす
+        // グリッドなし(false), 番号なし(false), ★強制黒(true)
         if (currentData.length > 0) {
-            drawReplay(currentData, false, false); 
+            drawReplay(currentData, false, false, true); 
         } else {
-            // データ未読み込み時（空白の紙として保存する場合）
+            // データがない場合も白背景にする
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            // グリッド等を描かないならこれだけでOK
         }
 
         // 2. 画像として保存
@@ -84,9 +84,10 @@ window.addEventListener('load', () => {
         link.href = canvas.toDataURL('image/png');
         link.click();
 
-        // 3. 画面表示用に元に戻す：グリッドあり(true), 番号あり(true)
+        // 3. 画面表示用に戻す
+        // グリッドあり, 番号あり, 色は通常(forceBlack=false)
         if (currentData.length > 0) {
-            drawReplay(currentData, true, true);
+            drawReplay(currentData, true, true, false);
         } else {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             drawGridAndNumbers(true, true);
@@ -185,12 +186,13 @@ window.addEventListener('load', () => {
     // 描画処理
     // 引数 drawGrid: trueなら罫線あり
     // 引数 drawNumbers: trueなら番号あり
+    // 引数 forceBlack: trueなら軌跡をすべて黒にする
     // ----------------------------------------
-    function drawReplay(data, drawGrid = true, drawNumbers = true) {
+    function drawReplay(data, drawGrid = true, drawNumbers = true, forceBlack = false) {
         // キャンバスをクリア
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // ★重要: 保存時に背景が透明にならないよう白で塗りつぶす
+        // 背景を白で塗りつぶす (透過防止)
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
@@ -219,8 +221,14 @@ window.addEventListener('load', () => {
             const pressure = point.pressure || 0;
             const lineWidth = Math.max(1, pressure * 1.5);
 
-            const colorIdx = (point.stroke_id - 1) % colors.length;
-            const color = colors[colorIdx >= 0 ? colorIdx : 0];
+            // ★色決定ロジック
+            let color;
+            if (forceBlack) {
+                color = '#000000'; // 黒固定
+            } else {
+                const colorIdx = (point.stroke_id - 1) % colors.length;
+                color = colors[colorIdx >= 0 ? colorIdx : 0]; // パレット使用
+            }
 
             ctx.lineWidth = lineWidth;
             ctx.strokeStyle = color;
@@ -246,6 +254,7 @@ window.addEventListener('load', () => {
                     lastX = null; lastY = null;
                 }
             } else {
+                // Plotter Logic
                 const isMoveCommand = (point.command === 'A0' || point.command === 'G0');
                 const isDrawCommand = (point.command === 'A1' || point.command === 'G1' || point.command === 'D1');
 
@@ -281,7 +290,6 @@ window.addEventListener('load', () => {
     function drawGridAndNumbers(drawGrid = true, drawNumbers = true) {
         const cellSize = canvasSize / GRID_SIZE;
 
-        // グリッド線と外枠 (drawGridがtrueの時だけ描画)
         if (drawGrid) {
             ctx.strokeStyle = '#e0e0e0';
             ctx.lineWidth = 1;
@@ -294,13 +302,11 @@ window.addEventListener('load', () => {
             }
             ctx.stroke();
 
-            // 外枠
             ctx.strokeStyle = '#333';
             ctx.lineWidth = 2;
             ctx.strokeRect(0, 0, canvas.width, canvas.height);
         }
 
-        // セル番号 (drawNumbersがtrueの時だけ描画)
         if (drawNumbers) {
             ctx.fillStyle = '#ccc'; 
             ctx.font = '20px sans-serif';
@@ -318,6 +324,6 @@ window.addEventListener('load', () => {
         }
     }
     
-    // 初期表示（両方あり）
+    // 初期表示
     drawGridAndNumbers(true, true);
 });

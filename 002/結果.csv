@@ -1,0 +1,10 @@
+﻿FileName,Target_Label,IoU_Score
+img_001.png,cho,0.0076
+img_002.png,kou,0.0129
+img_003.png,ko,0.0351
+img_004.png,kou,0.0258
+img_005.png,ko,0.0363
+img_006.png,cho,0.0071
+img_007.png,ko,0.0204
+img_008.png,cho,0.0121
+img_009.png,kou,0.0102
