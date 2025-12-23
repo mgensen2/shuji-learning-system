@@ -3,15 +3,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 
-<<<<<<< HEAD
-# --- 設定 ---
-INPUT_CSV = 'IoU_result.csv'
-FONT_NAME = 'MS Gothic' # Windows用 (Macなら 'Hiragino Sans')
-=======
 # --- 設定: 太らせる回数を分ける ---
 TARGET_DILATE = 12   # お手本(線画)はガッツリ太くして「許容範囲」を作る
 SUBJECT_DILATE = 1   # 手書き(筆)はもともと太いので、穴埋め程度にする
->>>>>>> d16239b267f6cf61dfced23b8fca90e33e6f3ec3
 
 # グラフの表示順（聴覚→触覚→提案）とラベル名
 CONDITION_ORDER = ['C', 'B', 'A']
@@ -27,11 +21,6 @@ def main():
         print(f"エラー: {INPUT_CSV} が見つかりません。")
         return
     try:
-<<<<<<< HEAD
-        df = pd.read_csv(INPUT_CSV)
-    except:
-        df = pd.read_csv(INPUT_CSV, encoding='shift_jis')
-=======
         n = np.fromfile(filename, np.uint8)
         img = cv2.imdecode(n, flags)
         return img
@@ -40,46 +29,50 @@ def main():
 
 # --- ★追加: 影やノイズを除去する関数 ---
 def remove_shadows_and_noise(img_bin):
-    # 連結成分分析（塊ごとのラベル付け）
+    """
+    影除去の最終版:
+    1. 「重心」が端にあるものだけを影とみなす（文字が端に触れていても重心が中央なら消さない）
+    2. 離れ文字（父、小など）のパーツは全て残す
+    """
+    # 連結成分分析
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img_bin, connectivity=8)
     
     img_h, img_w = img_bin.shape
     new_img = np.zeros_like(img_bin)
     
-    # 面積が最大の「文字らしい」成分を探す
-    max_area = 0
-    best_label = -1
+    # 影判定の基準ゾーン（画面端から10%以内を「影ゾーン」とする）
+    margin_w = img_w * 0.10 
+    margin_h = img_h * 0.10
     
-    for i in range(1, num_labels): # ラベル0は背景なのでスキップ
+    # ラベル0は背景なのでスキップ
+    for i in range(1, num_labels):
         x, y, w, h, area = stats[i]
+        cx, cy = centroids[i] # ★ここが重要：塊の「重心」座標
         
-        # 端に接している塊（影の可能性大）を除外
-        # 上下左右の端から数ピクセル以内にあるか
-        is_touching_edge = (x <= 1) or (y <= 1) or (x + w >= img_w - 1) or (y + h >= img_h - 1)
+        # --- A. 影判定 (重心が端っこにある & 形が細長い) ---
         
-        # ただし、画面中央を大きく占めるような「巨大な文字」が端に触れている場合は残したいので
-        # アスペクト比（縦横比）で「細長い影」だけを消すロジックにする
-        aspect_ratio = h / w if w > 0 else 0
+        # 左端 or 右端にある縦長の影
+        # 「重心(cx)が端のゾーンにある」 かつ 「縦に長い(高さが画面の20%以上)」
+        is_side_shadow = (cx < margin_w or cx > img_w - margin_w) and (h > img_h * 0.2)
         
-        # 「端に接している」かつ「極端に細長い（影っぽい）」なら無視
-        if is_touching_edge and (aspect_ratio > 5.0 or aspect_ratio < 0.2):
-            continue
-            
-        # ノイズ除去（小さすぎるゴミは無視）
-        if area < 50: 
+        # 上端 or 下端にある横長の影
+        # 「重心(cy)が端のゾーンにある」 かつ 「横に長い(幅が画面の20%以上)」
+        is_top_bottom_shadow = (cy < margin_h or cy > img_h - margin_h) and (w > img_w * 0.2)
+        
+        if is_side_shadow or is_top_bottom_shadow:
+            continue # これは影なので描画しない（削除）
+
+        # --- B. ノイズ除去 ---
+        # ゴマ粒のようなノイズは消す（文字の点画はこれより大きいはず）
+        if area < 20: 
             continue
 
-        # 一番大きい塊を記憶
-        if area > max_area:
-            max_area = area
-            best_label = i
-            
-    # 選ばれた塊だけを描画
-    if best_label != -1:
-        new_img[labels == best_label] = 255
+        # --- C. 採用 ---
+        # 影でもゴミでもないものは、全てキャンバスに描く
+        # これにより、離れているパーツも全て保持される
+        new_img[labels == i] = 255
         
     return new_img
-
 # --- 画像の正規化（修正版） ---
 def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     coords = cv2.findNonZero(img_bin)
@@ -105,7 +98,6 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     if dilate_iter > 0:
         kernel = np.ones((3,3), np.uint8)
         canvas = cv2.dilate(canvas, kernel, iterations=dilate_iter)
->>>>>>> d16239b267f6cf61dfced23b8fca90e33e6f3ec3
         
     # ラベルの置換（改行を入れて幅を抑える）
     df['Condition_Name'] = df['Condition'].map(CONDITION_LABELS)
@@ -125,66 +117,15 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     sns.barplot(data=df, x='Condition', y='IoU', order=CONDITION_ORDER, 
                 palette='viridis', capsize=.1, errorbar='se')
     
-<<<<<<< HEAD
-    # X軸ラベルを置換して読みやすく
-    plt.xticks(ticks=[0, 1, 2], labels=[CONDITION_LABELS[c] for c in CONDITION_ORDER])
-    plt.title('Level 1: 全体比較 (条件ごとの平均IoU)')
-    plt.ylabel('IoU Score')
-    plt.grid(axis='y', linestyle='--', alpha=0.5)
-    plt.savefig('L1_Overall_Graph.png')
-    
-    # --- Level 2: 文字別 (棒グラフ) ---
-    print("\n【Level 2】文字別")
-    summary2 = df.groupby(['Correct_Char', 'Condition'])['IoU'].agg(['mean', 'std', 'count'])
-    print(summary2)
-    summary2.to_csv('L2_Character_Summary.csv', encoding='utf-8-sig')
-=======
     # 緑:お手本(Target), 赤:手書き(Subject), 黄:重なり
     debug_img = np.zeros((img_target.shape[0], img_target.shape[1], 3), dtype=np.uint8)
     debug_img[:, :, 1] = img_target # G
     debug_img[:, :, 2] = img_subject # R
->>>>>>> d16239b267f6cf61dfced23b8fca90e33e6f3ec3
     
     plt.figure(figsize=(10, 6), constrained_layout=True)
     sns.barplot(data=df, x='Correct_Char', y='IoU', hue='Condition', 
                 hue_order=CONDITION_ORDER, palette='viridis', capsize=.1)
     
-<<<<<<< HEAD
-    # 凡例のラベルをわかりやすく
-    handles, labels = plt.gca().get_legend_handles_labels()
-    new_labels = [CONDITION_LABELS[l] for l in CONDITION_ORDER]
-    plt.legend(handles, new_labels, title='条件', bbox_to_anchor=(1.02, 1), loc='upper left')
-    
-    plt.title('Level 2: 文字種別のIoU比較')
-    plt.grid(axis='y', linestyle='--', alpha=0.5)
-    plt.savefig('L2_Character_Graph.png')
-
-    # --- Level 3: 個人別 (折れ線) ---
-    print("\n【Level 3】個人別")
-    summary3 = df.pivot_table(index='Subject_ID', columns='Condition', values='IoU')
-    print(summary3)
-    summary3.to_csv('L3_Individual_Summary.csv', encoding='utf-8-sig')
-    
-    plt.figure(figsize=(11, 6), constrained_layout=True)
-    
-    # 個人ごとの変化をプロット
-    sns.pointplot(data=df, x='Condition', y='IoU', hue='Subject_ID', 
-                  order=CONDITION_ORDER, dodge=True, markers='o', scale=0.8)
-    
-    plt.xticks(ticks=[0, 1, 2], labels=[CONDITION_LABELS[c] for c in CONDITION_ORDER])
-    plt.title('Level 3: 個人ごとのIoU変化 (ID別)')
-    plt.ylabel('Mean IoU Score')
-    
-    # 凡例を外に出す (グラフと重ならないように)
-    plt.legend(title='Subject ID', bbox_to_anchor=(1.02, 1), loc='upper left', ncol=1)
-    plt.grid(axis='y', linestyle='--', alpha=0.5)
-    plt.savefig('L3_Individual_Graph.png')
-    
-    print("\n全分析完了。画像とCSVを確認してください。")
-
-if __name__ == "__main__":
-    main()
-=======
     try:
         ext = os.path.splitext(save_path)[1]
         result, n = cv2.imencode(ext, debug_img)
@@ -349,4 +290,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = IoUAutoMatchApp(root)
     root.mainloop()
->>>>>>> d16239b267f6cf61dfced23b8fca90e33e6f3ec3
