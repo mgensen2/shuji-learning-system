@@ -1,25 +1,18 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import cv2
+import numpy as np
 import os
+import pandas as pd
+import re
 
-# --- 設定: 太らせる回数を分ける ---
-TARGET_DILATE = 12   # お手本(線画)はガッツリ太くして「許容範囲」を作る
-SUBJECT_DILATE = 1   # 手書き(筆)はもともと太いので、穴埋め程度にする
+# --- 設定 ---
+TARGET_DILATE = 13   # お手本(線画)を太らせる量
+SUBJECT_DILATE = 1   # 手書き(筆)を太らせる量
+EDGE_CUT_RATIO = 0.08 # ★追加: 上下左右の端から何%を強制削除するか (0.08 = 8%)
 
-# グラフの表示順（聴覚→触覚→提案）とラベル名
-CONDITION_ORDER = ['C', 'B', 'A']
-CONDITION_LABELS = {
-    'A': 'A:提案手法\n(両方)', 
-    'B': 'B:触覚のみ', 
-    'C': 'C:聴覚のみ'
-}
-
-def main():
-    # 1. データ読み込み
-    if not os.path.exists(INPUT_CSV):
-        print(f"エラー: {INPUT_CSV} が見つかりません。")
-        return
+# --- 日本語パス対応 画像読み込み ---
+def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
     try:
         n = np.fromfile(filename, np.uint8)
         img = cv2.imdecode(n, flags)
@@ -27,53 +20,43 @@ def main():
     except Exception as e:
         return None
 
-# --- ★追加: 影やノイズを除去する関数 ---
-def remove_shadows_and_noise(img_bin):
-    """
-    影除去の最終版:
-    1. 「重心」が端にあるものだけを影とみなす（文字が端に触れていても重心が中央なら消さない）
-    2. 離れ文字（父、小など）のパーツは全て残す
-    """
+# --- ★追加: 画像の四辺を強制的に黒塗りする関数 ---
+def clear_image_edges(img_bin, ratio=0.05):
+    h, w = img_bin.shape
+    cut_h = int(h * ratio)
+    cut_w = int(w * ratio)
+    
+    # 画像をコピーして編集
+    img_cleared = img_bin.copy()
+    
+    # 上・下・左・右 の領域を0(黒)にする
+    img_cleared[:cut_h, :] = 0          # 上
+    img_cleared[-cut_h:, :] = 0         # 下
+    img_cleared[:, :cut_w] = 0          # 左
+    img_cleared[:, -cut_w:] = 0         # 右
+    
+    return img_cleared
+
+# --- ノイズ除去 (強制削除後なのでシンプルに) ---
+def remove_small_noise(img_bin):
     # 連結成分分析
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img_bin, connectivity=8)
-    
-    img_h, img_w = img_bin.shape
     new_img = np.zeros_like(img_bin)
-    
-    # 影判定の基準ゾーン（画面端から10%以内を「影ゾーン」とする）
-    margin_w = img_w * 0.10 
-    margin_h = img_h * 0.10
     
     # ラベル0は背景なのでスキップ
     for i in range(1, num_labels):
-        x, y, w, h, area = stats[i]
-        cx, cy = centroids[i] # ★ここが重要：塊の「重心」座標
+        area = stats[i][4] # 面積
         
-        # --- A. 影判定 (重心が端っこにある & 形が細長い) ---
-        
-        # 左端 or 右端にある縦長の影
-        # 「重心(cx)が端のゾーンにある」 かつ 「縦に長い(高さが画面の20%以上)」
-        is_side_shadow = (cx < margin_w or cx > img_w - margin_w) and (h > img_h * 0.2)
-        
-        # 上端 or 下端にある横長の影
-        # 「重心(cy)が端のゾーンにある」 かつ 「横に長い(幅が画面の20%以上)」
-        is_top_bottom_shadow = (cy < margin_h or cy > img_h - margin_h) and (w > img_w * 0.2)
-        
-        if is_side_shadow or is_top_bottom_shadow:
-            continue # これは影なので描画しない（削除）
-
-        # --- B. ノイズ除去 ---
-        # ゴマ粒のようなノイズは消す（文字の点画はこれより大きいはず）
-        if area < 20: 
+        # 極端に小さいゴミ(面積50px以下)だけ消す
+        if area < 50: 
             continue
 
-        # --- C. 採用 ---
-        # 影でもゴミでもないものは、全てキャンバスに描く
-        # これにより、離れているパーツも全て保持される
+        # それ以外は全て採用 (離れ文字対策)
         new_img[labels == i] = 255
         
     return new_img
-# --- 画像の正規化（修正版） ---
+
+# --- 画像の正規化・センタリング ---
 def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     coords = cv2.findNonZero(img_bin)
     if coords is None: return np.zeros(canvas_size, dtype=np.uint8)
@@ -84,7 +67,6 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     h_roi, w_roi = char_roi.shape
     target_w, target_h = canvas_size
     
-    # スケール計算（余白0.9倍）
     scale = min(target_w / w_roi, target_h / h_roi) * 0.9
     new_w, new_h = int(max(1, w_roi * scale)), int(max(1, h_roi * scale))
     
@@ -94,37 +76,28 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     start_x, start_y = (target_w - new_w) // 2, (target_h - new_h) // 2
     canvas[start_y:start_y+new_h, start_x:start_x+new_w] = resized_char
     
-    # 膨張処理（太らせる）
     if dilate_iter > 0:
         kernel = np.ones((3,3), np.uint8)
         canvas = cv2.dilate(canvas, kernel, iterations=dilate_iter)
         
-    # ラベルの置換（改行を入れて幅を抑える）
-    df['Condition_Name'] = df['Condition'].map(CONDITION_LABELS)
-    
-    # フォント設定
-    plt.rcParams['font.family'] = FONT_NAME
+    return canvas
 
-    # --- Level 1: 全体比較 (棒グラフ) ---
-    print("\n【Level 1】全体比較")
-    # 集計
-    summary1 = df.groupby('Condition')['IoU'].agg(['mean', 'std', 'sem', 'count'])
-    print(summary1)
-    summary1.to_csv('L1_Overall_Summary.csv', encoding='utf-8-sig')
+# --- IoU計算 & デバッグ画像保存 ---
+def calc_iou_and_save(img_target, img_subject, save_path):
+    intersection = cv2.bitwise_and(img_target, img_subject)
+    union = cv2.bitwise_or(img_target, img_subject)
     
-    # グラフ
-    plt.figure(figsize=(8, 6), constrained_layout=True) # 重なり防止レイアウト
-    sns.barplot(data=df, x='Condition', y='IoU', order=CONDITION_ORDER, 
-                palette='viridis', capsize=.1, errorbar='se')
+    area_inter = cv2.countNonZero(intersection)
+    area_union = cv2.countNonZero(union)
     
-    # 緑:お手本(Target), 赤:手書き(Subject), 黄:重なり
+    iou = area_inter / area_union if area_union > 0 else 0.0
+    
     debug_img = np.zeros((img_target.shape[0], img_target.shape[1], 3), dtype=np.uint8)
-    debug_img[:, :, 1] = img_target # G
-    debug_img[:, :, 2] = img_subject # R
+    debug_img[:, :, 1] = img_target
+    debug_img[:, :, 2] = img_subject
     
-    plt.figure(figsize=(10, 6), constrained_layout=True)
-    sns.barplot(data=df, x='Correct_Char', y='IoU', hue='Condition', 
-                hue_order=CONDITION_ORDER, palette='viridis', capsize=.1)
+    cv2.putText(debug_img, f"IoU: {iou:.3f}", (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
     
     try:
         ext = os.path.splitext(save_path)[1]
@@ -141,7 +114,7 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
 class IoUAutoMatchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("IoU計算 (影除去 & 太さ調整版)")
+        self.root.title("IoU計算 (四辺強制削除版)")
         self.root.geometry("650x500")
         
         self.targets = {} 
@@ -188,8 +161,6 @@ class IoUAutoMatchApp:
                 img = imread_jp(p)
                 if img is not None:
                     _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    # ★重要: お手本は「線」なので、ガッツリ太らせる (TARGET_DILATE)
-                    # お手本は綺麗なので remove_shadows は不要
                     self.targets[key] = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
                     loaded_names.append(f"{fname}->{key}")
         
@@ -260,11 +231,14 @@ class IoUAutoMatchApp:
 
                 _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 
-                # ★重要1: 手書き画像から「影」を除去する
-                clean_bin = remove_shadows_and_noise(bin_img)
+                # ★手順1: まず四辺をバッサリ切り落とす (EDGE_CUT_RATIO=0.08)
+                cleared_img = clear_image_edges(bin_img, ratio=EDGE_CUT_RATIO)
                 
-                # ★重要2: 手書き画像はほとんど太らせない (SUBJECT_DILATE)
-                norm_sub = normalize_and_process(clean_bin, dilate_iter=SUBJECT_DILATE)
+                # ★手順2: 残った細かいゴミだけ消す
+                clean_img = remove_small_noise(cleared_img)
+                
+                # ★手順3: 正規化
+                norm_sub = normalize_and_process(clean_img, dilate_iter=SUBJECT_DILATE)
                 
                 dbg_name = f"{sub_id}_{num}_{target_key}.png"
                 dbg_path = os.path.join(debug_dir, dbg_name)
