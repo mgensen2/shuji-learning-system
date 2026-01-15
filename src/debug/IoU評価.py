@@ -5,11 +5,12 @@ import numpy as np
 import os
 import pandas as pd
 import re
+import math
 
 # --- 設定 ---
-TARGET_DILATE = 13   # お手本(線画)を太らせる量
-SUBJECT_DILATE = 1   # 手書き(筆)を太らせる量
-EDGE_CUT_RATIO = 0.08 # ★追加: 上下左右の端から何%を強制削除するか (0.08 = 8%)
+TARGET_DILATE = 13      # お手本(線画)は太くして許容範囲を作る
+SUBJECT_DILATE = 1      # 手書き(筆)は太らせない
+EDGE_CUT_RATIO = 0.08   # ★追加: 上下左右の端から何%を強制削除するか (0.08 = 8%)
 
 # --- 日本語パス対応 画像読み込み ---
 def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
@@ -20,50 +21,77 @@ def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
     except Exception as e:
         return None
 
-# --- ★追加: 画像の四辺を強制的に黒塗りする関数 ---
-def clear_image_edges(img_bin, ratio=0.05):
+# --- 影やノイズを除去する関数 ---
+def remove_shadows_and_noise(img_bin):
     h, w = img_bin.shape
-    cut_h = int(h * ratio)
-    cut_w = int(w * ratio)
     
-    # 画像をコピーして編集
-    img_cleared = img_bin.copy()
+    # --- ★追加: 画像の縁を強制的に黒く塗りつぶしてノイズ削除 ---
+    # 元の画像を書き換えないようコピーして処理
+    proc_img = img_bin.copy()
     
-    # 上・下・左・右 の領域を0(黒)にする
-    img_cleared[:cut_h, :] = 0          # 上
-    img_cleared[-cut_h:, :] = 0         # 下
-    img_cleared[:, :cut_w] = 0          # 左
-    img_cleared[:, -cut_w:] = 0         # 右
+    cut_w = int(w * EDGE_CUT_RATIO)
+    cut_h = int(h * EDGE_CUT_RATIO)
     
-    return img_cleared
+    if cut_h > 0:
+        proc_img[:cut_h, :] = 0        # 上端を削除
+        proc_img[-cut_h:, :] = 0       # 下端を削除
+    if cut_w > 0:
+        proc_img[:, :cut_w] = 0        # 左端を削除
+        proc_img[:, -cut_w:] = 0       # 右端を削除
 
-# --- ノイズ除去 (強制削除後なのでシンプルに) ---
-def remove_small_noise(img_bin):
-    # 連結成分分析
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img_bin, connectivity=8)
-    new_img = np.zeros_like(img_bin)
+    # 1. 連結成分分析 (縁をカットした画像で判定)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(proc_img, connectivity=8)
     
-    # ラベル0は背景なのでスキップ
+    new_img = np.zeros_like(proc_img)
+    
+    # 影判定エリア（さらに内側の影用）
+    margin_w = w * 0.15 
+    margin_h = h * 0.15
+    
     for i in range(1, num_labels):
-        area = stats[i][4] # 面積
+        x, y, stat_w, stat_h, area = stats[i]
+        cx, cy = centroids[i] 
         
-        # 極端に小さいゴミ(面積50px以下)だけ消す
+        # 端に残った影の除去（重心位置と形状で判断）
+        is_side_shadow = (cx < margin_w or cx > w - margin_w) and (stat_h > h * 0.2)
+        is_top_bottom_shadow = (cy < margin_h or cy > h - margin_h) and (stat_w > w * 0.2)
+        
+        if is_side_shadow or is_top_bottom_shadow:
+            continue 
+
+        # 小さすぎるゴミを除去
         if area < 50: 
             continue
 
-        # それ以外は全て採用 (離れ文字対策)
         new_img[labels == i] = 255
         
     return new_img
 
-# --- 画像の正規化・センタリング ---
+# --- 画像の正規化 ＆ ズレ量計算 ---
 def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
+    """
+    戻り値: (正規化後の画像, X方向のズレ, Y方向のズレ)
+    """
     coords = cv2.findNonZero(img_bin)
-    if coords is None: return np.zeros(canvas_size, dtype=np.uint8)
+    
+    if coords is None: 
+        return np.zeros(canvas_size, dtype=np.uint8), 0, 0
     
     x, y, w, h = cv2.boundingRect(coords)
-    char_roi = img_bin[y:y+h, x:x+w]
     
+    # --- ズレ量の計算 ---
+    img_h, img_w = img_bin.shape
+    img_center_x = img_w / 2
+    img_center_y = img_h / 2
+    
+    char_center_x = x + (w / 2)
+    char_center_y = y + (h / 2)
+    
+    shift_x = char_center_x - img_center_x
+    shift_y = char_center_y - img_center_y
+    # -------------------
+
+    char_roi = img_bin[y:y+h, x:x+w]
     h_roi, w_roi = char_roi.shape
     target_w, target_h = canvas_size
     
@@ -80,10 +108,10 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
         kernel = np.ones((3,3), np.uint8)
         canvas = cv2.dilate(canvas, kernel, iterations=dilate_iter)
         
-    return canvas
+    return canvas, shift_x, shift_y
 
 # --- IoU計算 & デバッグ画像保存 ---
-def calc_iou_and_save(img_target, img_subject, save_path):
+def calc_iou_and_save(img_target, img_subject, save_path, shift_dist):
     intersection = cv2.bitwise_and(img_target, img_subject)
     union = cv2.bitwise_or(img_target, img_subject)
     
@@ -93,11 +121,13 @@ def calc_iou_and_save(img_target, img_subject, save_path):
     iou = area_inter / area_union if area_union > 0 else 0.0
     
     debug_img = np.zeros((img_target.shape[0], img_target.shape[1], 3), dtype=np.uint8)
-    debug_img[:, :, 1] = img_target
-    debug_img[:, :, 2] = img_subject
+    debug_img[:, :, 1] = img_target # G
+    debug_img[:, :, 2] = img_subject # R
     
     cv2.putText(debug_img, f"IoU: {iou:.3f}", (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    cv2.putText(debug_img, f"Shift: {shift_dist:.1f}px", (10, 60), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
     
     try:
         ext = os.path.splitext(save_path)[1]
@@ -114,8 +144,8 @@ def calc_iou_and_save(img_target, img_subject, save_path):
 class IoUAutoMatchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("IoU計算 (四辺強制削除版)")
-        self.root.geometry("650x500")
+        self.root.title("IoU & ズレ量計算 (端カット版)")
+        self.root.geometry("650x550")
         
         self.targets = {} 
         self.csv_path = tk.StringVar()
@@ -161,7 +191,9 @@ class IoUAutoMatchApp:
                 img = imread_jp(p)
                 if img is not None:
                     _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    self.targets[key] = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
+                    # お手本はカットせずそのまま使用（あるいは必要ならカットしても良いが、通常お手本は綺麗なので不要）
+                    processed_target, _, _ = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
+                    self.targets[key] = processed_target
                     loaded_names.append(f"{fname}->{key}")
         
         self.lbl_targets.config(text=f"登録済み: {', '.join(loaded_names)}")
@@ -231,19 +263,16 @@ class IoUAutoMatchApp:
 
                 _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 
-                # ★手順1: まず四辺をバッサリ切り落とす (EDGE_CUT_RATIO=0.08)
-                cleared_img = clear_image_edges(bin_img, ratio=EDGE_CUT_RATIO)
+                # ★ここで端カット処理が走ります
+                clean_bin = remove_shadows_and_noise(bin_img)
                 
-                # ★手順2: 残った細かいゴミだけ消す
-                clean_img = remove_small_noise(cleared_img)
-                
-                # ★手順3: 正規化
-                norm_sub = normalize_and_process(clean_img, dilate_iter=SUBJECT_DILATE)
-                
+                norm_sub, shift_x, shift_y = normalize_and_process(clean_bin, dilate_iter=SUBJECT_DILATE)
+                shift_dist = math.sqrt(shift_x**2 + shift_y**2)
+
                 dbg_name = f"{sub_id}_{num}_{target_key}.png"
                 dbg_path = os.path.join(debug_dir, dbg_name)
                 
-                iou = calc_iou_and_save(self.targets[target_key], norm_sub, dbg_path)
+                iou = calc_iou_and_save(self.targets[target_key], norm_sub, dbg_path, shift_dist)
                 
                 results.append({
                     "Subject_ID": sub_id,
@@ -251,14 +280,24 @@ class IoUAutoMatchApp:
                     "Num": num,
                     "Correct_Char": target_key,
                     "Condition": row.iloc[0]['条件'],
-                    "IoU": iou
+                    "IoU": iou,
+                    "Shift_X": shift_x,
+                    "Shift_Y": shift_y,
+                    "Shift_Dist": shift_dist
                 })
                 count += 1
-                print(f"Processed: {sub_id}-{num} ({target_key}) IoU={iou:.3f}")
+                print(f"Processed: {sub_id}-{num} IoU={iou:.3f}, Shift={shift_dist:.1f}")
 
         if results:
-            pd.DataFrame(results).to_csv(save_path, index=False, encoding='utf-8-sig')
-            messagebox.showinfo("完了", f"{count}件完了\n{save_path}")
+            df_result = pd.DataFrame(results)
+            df_result.to_csv(save_path, index=False, encoding='utf-8-sig')
+            
+            summary = df_result.groupby("Condition")[["IoU", "Shift_Dist"]].mean()
+            print("\n=== 条件ごとの平均値 ===")
+            print(summary)
+            
+            summary_str = summary.to_string()
+            messagebox.showinfo("完了", f"{count}件完了\n\n【条件別平均】\n{summary_str}\n\n保存先: {save_path}")
 
 if __name__ == "__main__":
     root = tk.Tk()
