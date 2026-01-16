@@ -5,9 +5,10 @@ import numpy as np
 import os
 import pandas as pd
 import re
+import math
 
 # --- 設定: 太らせる回数を分ける ---
-TARGET_DILATE = 12   # お手本(線画)はガッツリ太くして「許容範囲」を作る
+TARGET_DILATE = 13   # お手本(線画)はガッツリ太くして「許容範囲」を作る
 SUBJECT_DILATE = 1   # 手書き(筆)はもともと太いので、穴埋め程度にする
 
 # --- 日本語パス対応 画像読み込み ---
@@ -19,60 +20,67 @@ def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
     except Exception as e:
         return None
 
-# --- ★追加: 影やノイズを除去する関数 ---
+# --- 影やノイズを除去する関数 ---
 def remove_shadows_and_noise(img_bin):
-    # 連結成分分析（塊ごとのラベル付け）
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img_bin, connectivity=8)
     
     img_h, img_w = img_bin.shape
     new_img = np.zeros_like(img_bin)
     
-    # 面積が最大の「文字らしい」成分を探す
-    max_area = 0
-    best_label = -1
+    margin_w = img_w * 0.15 
+    margin_h = img_h * 0.15
     
-    for i in range(1, num_labels): # ラベル0は背景なのでスキップ
+    for i in range(1, num_labels):
         x, y, w, h, area = stats[i]
+        cx, cy = centroids[i] 
         
-        # 端に接している塊（影の可能性大）を除外
-        # 上下左右の端から数ピクセル以内にあるか
-        is_touching_edge = (x <= 1) or (y <= 1) or (x + w >= img_w - 1) or (y + h >= img_h - 1)
+        is_side_shadow = (cx < margin_w or cx > img_w - margin_w) and (h > img_h * 0.2)
+        is_top_bottom_shadow = (cy < margin_h or cy > img_h - margin_h) and (w > img_w * 0.2)
         
-        # ただし、画面中央を大きく占めるような「巨大な文字」が端に触れている場合は残したいので
-        # アスペクト比（縦横比）で「細長い影」だけを消すロジックにする
-        aspect_ratio = h / w if w > 0 else 0
-        
-        # 「端に接している」かつ「極端に細長い（影っぽい）」なら無視
-        if is_touching_edge and (aspect_ratio > 5.0 or aspect_ratio < 0.2):
-            continue
-            
-        # ノイズ除去（小さすぎるゴミは無視）
+        if is_side_shadow or is_top_bottom_shadow:
+            continue 
+
         if area < 50: 
             continue
 
-        # 一番大きい塊を記憶
-        if area > max_area:
-            max_area = area
-            best_label = i
-            
-    # 選ばれた塊だけを描画
-    if best_label != -1:
-        new_img[labels == best_label] = 255
+        new_img[labels == i] = 255
         
     return new_img
 
-# --- 画像の正規化（修正版） ---
+# --- ★変更: 画像の正規化 ＆ ズレ量計算 ---
 def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
+    """
+    戻り値: (正規化後の画像, X方向のズレ, Y方向のズレ)
+    """
     coords = cv2.findNonZero(img_bin)
-    if coords is None: return np.zeros(canvas_size, dtype=np.uint8)
     
+    # 何も書かれていない場合の処理
+    if coords is None: 
+        return np.zeros(canvas_size, dtype=np.uint8), 0, 0
+    
+    # 1. 元画像での文字の位置（バウンディングボックス）を取得
     x, y, w, h = cv2.boundingRect(coords)
-    char_roi = img_bin[y:y+h, x:x+w]
     
+    # --- ズレ量の計算 ---
+    # 画像の中心座標
+    img_h, img_w = img_bin.shape
+    img_center_x = img_w / 2
+    img_center_y = img_h / 2
+    
+    # 書かれた文字の中心座標（バウンディングボックスの中心）
+    char_center_x = x + (w / 2)
+    char_center_y = y + (h / 2)
+    
+    # ズレ = 文字の中心 - 画像の中心
+    shift_x = char_center_x - img_center_x
+    shift_y = char_center_y - img_center_y
+    # -------------------
+
+    # 2. 以下、正規化プロセス（位置合わせ）
+    char_roi = img_bin[y:y+h, x:x+w]
     h_roi, w_roi = char_roi.shape
     target_w, target_h = canvas_size
     
-    # スケール計算（余白0.9倍）
     scale = min(target_w / w_roi, target_h / h_roi) * 0.9
     new_w, new_h = int(max(1, w_roi * scale)), int(max(1, h_roi * scale))
     
@@ -82,15 +90,14 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     start_x, start_y = (target_w - new_w) // 2, (target_h - new_h) // 2
     canvas[start_y:start_y+new_h, start_x:start_x+new_w] = resized_char
     
-    # 膨張処理（太らせる）
     if dilate_iter > 0:
         kernel = np.ones((3,3), np.uint8)
         canvas = cv2.dilate(canvas, kernel, iterations=dilate_iter)
         
-    return canvas
+    return canvas, shift_x, shift_y
 
 # --- IoU計算 & デバッグ画像保存 ---
-def calc_iou_and_save(img_target, img_subject, save_path):
+def calc_iou_and_save(img_target, img_subject, save_path, shift_dist):
     intersection = cv2.bitwise_and(img_target, img_subject)
     union = cv2.bitwise_or(img_target, img_subject)
     
@@ -99,13 +106,15 @@ def calc_iou_and_save(img_target, img_subject, save_path):
     
     iou = area_inter / area_union if area_union > 0 else 0.0
     
-    # 緑:お手本(Target), 赤:手書き(Subject), 黄:重なり
     debug_img = np.zeros((img_target.shape[0], img_target.shape[1], 3), dtype=np.uint8)
     debug_img[:, :, 1] = img_target # G
     debug_img[:, :, 2] = img_subject # R
     
+    # 画像にIoUとズレ距離を描画
     cv2.putText(debug_img, f"IoU: {iou:.3f}", (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    cv2.putText(debug_img, f"Shift: {shift_dist:.1f}px", (10, 60), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
     
     try:
         ext = os.path.splitext(save_path)[1]
@@ -122,8 +131,8 @@ def calc_iou_and_save(img_target, img_subject, save_path):
 class IoUAutoMatchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("IoU計算 (影除去 & 太さ調整版)")
-        self.root.geometry("650x500")
+        self.root.title("IoU & ズレ量計算")
+        self.root.geometry("650x550")
         
         self.targets = {} 
         self.csv_path = tk.StringVar()
@@ -169,9 +178,9 @@ class IoUAutoMatchApp:
                 img = imread_jp(p)
                 if img is not None:
                     _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    # ★重要: お手本は「線」なので、ガッツリ太らせる (TARGET_DILATE)
-                    # お手本は綺麗なので remove_shadows は不要
-                    self.targets[key] = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
+                    # お手本の「ズレ」は使用しないので変数受け取りだけする ([0]番目の画像のみ使用)
+                    processed_target, _, _ = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
+                    self.targets[key] = processed_target
                     loaded_names.append(f"{fname}->{key}")
         
         self.lbl_targets.config(text=f"登録済み: {', '.join(loaded_names)}")
@@ -241,16 +250,18 @@ class IoUAutoMatchApp:
 
                 _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 
-                # ★重要1: 手書き画像から「影」を除去する
                 clean_bin = remove_shadows_and_noise(bin_img)
                 
-                # ★重要2: 手書き画像はほとんど太らせない (SUBJECT_DILATE)
-                norm_sub = normalize_and_process(clean_bin, dilate_iter=SUBJECT_DILATE)
+                # ★変更: 正規化画像だけでなく、ズレ量も受け取る
+                norm_sub, shift_x, shift_y = normalize_and_process(clean_bin, dilate_iter=SUBJECT_DILATE)
                 
+                # 中心からのユークリッド距離（ピクセル単位）
+                shift_dist = math.sqrt(shift_x**2 + shift_y**2)
+
                 dbg_name = f"{sub_id}_{num}_{target_key}.png"
                 dbg_path = os.path.join(debug_dir, dbg_name)
                 
-                iou = calc_iou_and_save(self.targets[target_key], norm_sub, dbg_path)
+                iou = calc_iou_and_save(self.targets[target_key], norm_sub, dbg_path, shift_dist)
                 
                 results.append({
                     "Subject_ID": sub_id,
@@ -258,14 +269,25 @@ class IoUAutoMatchApp:
                     "Num": num,
                     "Correct_Char": target_key,
                     "Condition": row.iloc[0]['条件'],
-                    "IoU": iou
+                    "IoU": iou,
+                    "Shift_X": shift_x,       # X方向のズレ
+                    "Shift_Y": shift_y,       # Y方向のズレ
+                    "Shift_Dist": shift_dist  # ズレの絶対距離
                 })
                 count += 1
-                print(f"Processed: {sub_id}-{num} ({target_key}) IoU={iou:.3f}")
+                print(f"Processed: {sub_id}-{num} IoU={iou:.3f}, Shift={shift_dist:.1f}")
 
         if results:
-            pd.DataFrame(results).to_csv(save_path, index=False, encoding='utf-8-sig')
-            messagebox.showinfo("完了", f"{count}件完了\n{save_path}")
+            df_result = pd.DataFrame(results)
+            df_result.to_csv(save_path, index=False, encoding='utf-8-sig')
+            
+            # --- 条件ごとの集計を表示 ---
+            summary = df_result.groupby("Condition")[["IoU", "Shift_Dist"]].mean()
+            print("\n=== 条件ごとの平均値 ===")
+            print(summary)
+            
+            summary_str = summary.to_string()
+            messagebox.showinfo("完了", f"{count}件完了\n\n【条件別平均】\n{summary_str}\n\n保存先: {save_path}")
 
 if __name__ == "__main__":
     root = tk.Tk()
