@@ -10,7 +10,7 @@ import math
 # --- 設定 ---
 TARGET_DILATE = 13      # お手本(線画)は太くして許容範囲を作る
 SUBJECT_DILATE = 1      # 手書き(筆)は太らせない
-EDGE_CUT_RATIO = 0.08   # ★追加: 上下左右の端から何%を強制削除するか (0.08 = 8%)
+EDGE_CUT_RATIO = 0.08   # ★上下左右の端から何%を強制削除するか (0.08 = 8%)
 
 # --- 日本語パス対応 画像読み込み ---
 def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
@@ -25,8 +25,7 @@ def imread_jp(filename, flags=cv2.IMREAD_GRAYSCALE):
 def remove_shadows_and_noise(img_bin):
     h, w = img_bin.shape
     
-    # --- ★追加: 画像の縁を強制的に黒く塗りつぶしてノイズ削除 ---
-    # 元の画像を書き換えないようコピーして処理
+    # --- 画像の縁を強制的に黒く塗りつぶしてノイズ削除 ---
     proc_img = img_bin.copy()
     
     cut_w = int(w * EDGE_CUT_RATIO)
@@ -44,22 +43,20 @@ def remove_shadows_and_noise(img_bin):
     
     new_img = np.zeros_like(proc_img)
     
-    # 影判定エリア（さらに内側の影用）
-    margin_w = w * 0.15 
-    margin_h = h * 0.15
-    
-    for i in range(1, num_labels):
-        x, y, stat_w, stat_h, area = stats[i]
-        cx, cy = centroids[i] 
+    for i in range(1, num_labels): # ラベル0は背景なのでスキップ
+        x, y, w_rect, h_rect, area = stats[i]
         
-        # 端に残った影の除去（重心位置と形状で判断）
-        is_side_shadow = (cx < margin_w or cx > w - margin_w) and (stat_h > h * 0.2)
-        is_top_bottom_shadow = (cy < margin_h or cy > h - margin_h) and (stat_w > w * 0.2)
+        # 端に接している塊（影の可能性大）を除外
+        is_touching_edge = (x <= 1) or (y <= 1) or (x + w_rect >= w - 1) or (y + h_rect >= h - 1)
         
-        if is_side_shadow or is_top_bottom_shadow:
-            continue 
-
-        # 小さすぎるゴミを除去
+        # アスペクト比（縦横比）で「細長い影」だけを消すロジック
+        aspect_ratio = h_rect / w_rect if w_rect > 0 else 0
+        
+        # 「端に接している」かつ「極端に細長い（影っぽい）」なら無視
+        if is_touching_edge and (aspect_ratio > 5.0 or aspect_ratio < 0.2):
+            continue
+            
+        # ノイズ除去（小さすぎるゴミは無視）
         if area < 50: 
             continue
 
@@ -67,30 +64,44 @@ def remove_shadows_and_noise(img_bin):
         
     return new_img
 
-# --- 画像の正規化 ＆ ズレ量計算 ---
+# --- 画像の正規化 ＆ ズレ量(BBox & 重心)計算 ---
 def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
     """
-    戻り値: (正規化後の画像, X方向のズレ, Y方向のズレ)
+    戻り値: (正規化後の画像, 
+             BBoxズレX, BBoxズレY, 
+             重心ズレX, 重心ズレY)
     """
-    coords = cv2.findNonZero(img_bin)
-    
-    if coords is None: 
-        return np.zeros(canvas_size, dtype=np.uint8), 0, 0
-    
-    x, y, w, h = cv2.boundingRect(coords)
-    
-    # --- ズレ量の計算 ---
     img_h, img_w = img_bin.shape
     img_center_x = img_w / 2
     img_center_y = img_h / 2
     
-    char_center_x = x + (w / 2)
-    char_center_y = y + (h / 2)
+    # 画素がある座標を探す
+    coords = cv2.findNonZero(img_bin)
     
-    shift_x = char_center_x - img_center_x
-    shift_y = char_center_y - img_center_y
-    # -------------------
+    if coords is None: 
+        # 真っ黒な画像の場合
+        return np.zeros(canvas_size, dtype=np.uint8), 0, 0, 0, 0
+    
+    # --- A. バウンディングボックス(BBox)の中心計算 ---
+    x, y, w, h = cv2.boundingRect(coords)
+    bbox_center_x = x + (w / 2)
+    bbox_center_y = y + (h / 2)
+    
+    shift_bbox_x = bbox_center_x - img_center_x
+    shift_bbox_y = bbox_center_y - img_center_y
 
+    # --- B. 重心(Centroid)の計算 ---
+    M = cv2.moments(img_bin)
+    if M["m00"] != 0:
+        centroid_x = M["m10"] / M["m00"]
+        centroid_y = M["m01"] / M["m00"]
+    else:
+        centroid_x, centroid_y = img_center_x, img_center_y
+        
+    shift_centroid_x = centroid_x - img_center_x
+    shift_centroid_y = centroid_y - img_center_y
+
+    # --- C. 画像の切り出しとリサイズ（正規化） ---
     char_roi = img_bin[y:y+h, x:x+w]
     h_roi, w_roi = char_roi.shape
     target_w, target_h = canvas_size
@@ -108,10 +119,10 @@ def normalize_and_process(img_bin, canvas_size=(300, 300), dilate_iter=0):
         kernel = np.ones((3,3), np.uint8)
         canvas = cv2.dilate(canvas, kernel, iterations=dilate_iter)
         
-    return canvas, shift_x, shift_y
+    return canvas, shift_bbox_x, shift_bbox_y, shift_centroid_x, shift_centroid_y
 
 # --- IoU計算 & デバッグ画像保存 ---
-def calc_iou_and_save(img_target, img_subject, save_path, shift_dist):
+def calc_iou_and_save(img_target, img_subject, save_path, bbox_dist, centroid_dist):
     intersection = cv2.bitwise_and(img_target, img_subject)
     union = cv2.bitwise_or(img_target, img_subject)
     
@@ -120,14 +131,22 @@ def calc_iou_and_save(img_target, img_subject, save_path, shift_dist):
     
     iou = area_inter / area_union if area_union > 0 else 0.0
     
+    # デバッグ画像作成 (緑:お手本, 赤:手書き)
     debug_img = np.zeros((img_target.shape[0], img_target.shape[1], 3), dtype=np.uint8)
     debug_img[:, :, 1] = img_target # G
     debug_img[:, :, 2] = img_subject # R
     
+    # 画像に情報を描画
     cv2.putText(debug_img, f"IoU: {iou:.3f}", (10, 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-    cv2.putText(debug_img, f"Shift: {shift_dist:.1f}px", (10, 60), 
+    
+    # BBox中心のズレ
+    cv2.putText(debug_img, f"BoxShift: {bbox_dist:.1f}px", (10, 60), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+    
+    # 重心のズレ
+    cv2.putText(debug_img, f"CenShift: {centroid_dist:.1f}px", (10, 85), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 255, 255), 1)
     
     try:
         ext = os.path.splitext(save_path)[1]
@@ -144,7 +163,7 @@ def calc_iou_and_save(img_target, img_subject, save_path, shift_dist):
 class IoUAutoMatchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("IoU & ズレ量計算 (端カット版)")
+        self.root.title("IoU & 重心ズレ計算 (端カット版)")
         self.root.geometry("650x550")
         
         self.targets = {} 
@@ -191,8 +210,8 @@ class IoUAutoMatchApp:
                 img = imread_jp(p)
                 if img is not None:
                     _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    # お手本はカットせずそのまま使用（あるいは必要ならカットしても良いが、通常お手本は綺麗なので不要）
-                    processed_target, _, _ = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
+                    # お手本も正規化プロセスを通す（ズレ情報は不要なので _ で受け取る）
+                    processed_target, _, _, _, _ = normalize_and_process(bin_img, dilate_iter=TARGET_DILATE)
                     self.targets[key] = processed_target
                     loaded_names.append(f"{fname}->{key}")
         
@@ -263,16 +282,23 @@ class IoUAutoMatchApp:
 
                 _, bin_img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
                 
-                # ★ここで端カット処理が走ります
+                # 端カット & ノイズ除去
                 clean_bin = remove_shadows_and_noise(bin_img)
                 
-                norm_sub, shift_x, shift_y = normalize_and_process(clean_bin, dilate_iter=SUBJECT_DILATE)
-                shift_dist = math.sqrt(shift_x**2 + shift_y**2)
+                # 正規化 & ズレ計算 (BBoxと重心)
+                # s_bbox_x/y: ボックス中心のズレ
+                # s_cent_x/y: 重心のズレ
+                norm_sub, s_bbox_x, s_bbox_y, s_cent_x, s_cent_y = normalize_and_process(clean_bin, dilate_iter=SUBJECT_DILATE)
+                
+                # 直線距離（ユークリッド距離）を計算
+                bbox_dist = math.sqrt(s_bbox_x**2 + s_bbox_y**2)
+                centroid_dist = math.sqrt(s_cent_x**2 + s_cent_y**2)
 
                 dbg_name = f"{sub_id}_{num}_{target_key}.png"
                 dbg_path = os.path.join(debug_dir, dbg_name)
                 
-                iou = calc_iou_and_save(self.targets[target_key], norm_sub, dbg_path, shift_dist)
+                # IoU計算 & 画像保存 (ズレ情報も渡す)
+                iou = calc_iou_and_save(self.targets[target_key], norm_sub, dbg_path, bbox_dist, centroid_dist)
                 
                 results.append({
                     "Subject_ID": sub_id,
@@ -281,23 +307,33 @@ class IoUAutoMatchApp:
                     "Correct_Char": target_key,
                     "Condition": row.iloc[0]['条件'],
                     "IoU": iou,
-                    "Shift_X": shift_x,
-                    "Shift_Y": shift_y,
-                    "Shift_Dist": shift_dist
+                    # バウンディングボックス基準
+                    "Shift_BBox_X": s_bbox_x,
+                    "Shift_BBox_Y": s_bbox_y,
+                    "Shift_BBox_Dist": bbox_dist,
+                    # 重心基準
+                    "Shift_Centroid_X": s_cent_x,
+                    "Shift_Centroid_Y": s_cent_y,
+                    "Shift_Centroid_Dist": centroid_dist
                 })
                 count += 1
-                print(f"Processed: {sub_id}-{num} IoU={iou:.3f}, Shift={shift_dist:.1f}")
+                print(f"Processed: {sub_id}-{num} IoU={iou:.3f}, BBoxDist={bbox_dist:.1f}, CenDist={centroid_dist:.1f}")
 
         if results:
             df_result = pd.DataFrame(results)
             df_result.to_csv(save_path, index=False, encoding='utf-8-sig')
             
-            summary = df_result.groupby("Condition")[["IoU", "Shift_Dist"]].mean()
+            # --- 集計 ---
+            # IoU, BBoxズレ距離, 重心ズレ距離 の平均を出す
+            summary = df_result.groupby("Condition")[["IoU", "Shift_BBox_Dist", "Shift_Centroid_Dist"]].mean()
+            
             print("\n=== 条件ごとの平均値 ===")
             print(summary)
             
             summary_str = summary.to_string()
             messagebox.showinfo("完了", f"{count}件完了\n\n【条件別平均】\n{summary_str}\n\n保存先: {save_path}")
+        else:
+            messagebox.showwarning("結果なし", "処理対象の画像が見つかりませんでした。")
 
 if __name__ == "__main__":
     root = tk.Tk()
