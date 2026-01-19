@@ -9,8 +9,8 @@ import os
 FONT_NAME = 'MS Gothic' 
 plt.rcParams['font.family'] = FONT_NAME
 
-FILE_ADD = '書字評価システム実験追加アンケート(1-6).csv'
-FILE_EVAL = '第三者評価フォーム(1-7).csv'
+FILE_ADD = '書字評価システム実験追加アンケート(1-10).csv'
+FILE_EVAL = '第三者評価フォーム(1-11).csv'
 
 # 条件マッピング
 CONDITION_MAP = {
