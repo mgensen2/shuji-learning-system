@@ -33,10 +33,10 @@ df['most_writable'] = df[target_col].apply(get_most_writable)
 counts = df['most_writable'].value_counts()
 
 # 5. 色の設定（前回のグラフと同じ色合いに固定）
-# 聴覚のみ＝青、提案システム＝オレンジ、触覚のみ＝緑
+# 聴覚のみ＝青、提案手法＝オレンジ、触覚のみ＝緑
 color_map = {
     '聴覚のみ': '#455681',    # 青
-    '提案システム': "#6cbc6e",  # オレンジ
+    '提案手法': "#6cbc6e",  # オレンジ
     '触覚のみ': '#2f837f'     # 緑
 }
 # データ順に合わせて色リストを作成

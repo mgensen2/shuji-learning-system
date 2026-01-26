@@ -44,7 +44,7 @@ def extract_score(val):
 tlx_cols_map = [
     ('聴覚', df.columns[8:14]),
     ('触覚', df.columns[14:20]),
-    ('提案システム', df.columns[20:26])
+    ('提案手法', df.columns[20:26])
 ]
 
 subscales_jp = ['精神的負担', '身体的負担', '時間的切迫感', '作業達成感', '努力', '不満']
@@ -69,7 +69,7 @@ tlx_df = pd.DataFrame(tlx_data)
 # 質問：「作業のやりづらさ」順 (1位=一番やりづらい, 3位=一番楽)
 # グラフ化：「やりやすさ」 (1点=やりづらい, 3点=やりやすい) に変換
 
-ease_scores = {'聴覚': [], '触覚': [], '提案システム': []}
+ease_scores = {'聴覚': [], '触覚': [], '提案手法': []}
 ranking_col = df.columns[7]
 
 for val in df[ranking_col]:
@@ -82,7 +82,7 @@ for val in df[ranking_col]:
         # 名前を統一
         if '聴覚' in item_raw: name = '聴覚'
         elif '触覚' in item_raw: name = '触覚'
-        elif '提案' in item_raw: name = '提案システム'
+        elif '提案' in item_raw: name = '提案手法'
         else: continue
             
         # rank 0 (1位:やりづらい) -> Score 1
@@ -108,7 +108,7 @@ elif system_name == 'Darwin':
     plt.rcParams['font.family'] = 'Hiragino Sans'
 
 # 表示順序
-order_cond = ['聴覚', '触覚', '提案システム']
+order_cond = ['聴覚', '触覚', '提案手法']
 order_subscale = subscales_jp
 
 # --- グラフ1: NASA-TLX ---

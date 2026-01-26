@@ -14,9 +14,9 @@ FILE_EVAL = '第三者評価フォーム(1-11).csv'
 
 # 条件マッピング
 CONDITION_MAP = {
-    '1': 'A:聴覚のみ',      
+    '1': 'C:聴覚のみ',      
     '2': 'B:触覚のみ',      
-    '3': 'C:提案手法'       
+    '3': 'A:提案手法'       
 }
 ORDER_LIST = sorted(list(CONDITION_MAP.values()))
 
